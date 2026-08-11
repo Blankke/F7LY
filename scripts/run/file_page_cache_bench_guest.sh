@@ -336,7 +336,7 @@ if ! cc -O2 -Wall -Wextra -pthread "$WORKDIR/bench.c" -o "$WORKDIR/bench"; then
     exit 1
 fi
 
-if [ ! -e /proc/f7ly/perf ]; then
+if [ ! -x /usr/bin/f7ly-perf ] || [ ! -r /proc/f7ly/perf/metrics ]; then
     echo "FILE_CACHE_RESULT ok=false diagnostic=false reason=no-perf"
     echo "#### OS COMP TEST GROUP END file-page-cache-perf ####"
     exit 1
@@ -356,14 +356,14 @@ sync
 snapshot_perf() {
     round=$1
     output=$2
-    cat /proc/f7ly/perf >"$output" || return 1
+    cat /proc/f7ly/perf/metrics >"$output" || return 1
     echo "FILE_CACHE_PERF_BEGIN round=$round"
     cat "$output"
     echo "FILE_CACHE_PERF_END round=$round"
 }
 
 reset_perf() {
-    echo reset >/proc/f7ly/perf 2>/dev/null
+    f7ly-perf reset metrics >/dev/null 2>&1
 }
 
 if ! reset_perf; then
@@ -406,12 +406,12 @@ if ! snapshot_perf 2 "$WORKDIR/perf-round2"; then
     exit 1
 fi
 
-HITS1=$(awk '$1 == "file_cache.hits" { print $2 }' "$WORKDIR/perf-round1")
-MISSES1=$(awk '$1 == "file_cache.misses" { print $2 }' "$WORKDIR/perf-round1")
-HITS2=$(awk '$1 == "file_cache.hits" { print $2 }' "$WORKDIR/perf-round2")
-MISSES2=$(awk '$1 == "file_cache.misses" { print $2 }' "$WORKDIR/perf-round2")
-READ1=$(awk '$1 == "ext4.read_bytes" { print $2 }' "$WORKDIR/perf-round1")
-READ2=$(awk '$1 == "ext4.read_bytes" { print $2 }' "$WORKDIR/perf-round2")
+HITS1=$(awk -F '\t' '$6 == "file_cache.hits" { sum += $9 } END { print sum + 0 }' "$WORKDIR/perf-round1")
+MISSES1=$(awk -F '\t' '$6 == "file_cache.misses" { sum += $9 } END { print sum + 0 }' "$WORKDIR/perf-round1")
+HITS2=$(awk -F '\t' '$6 == "file_cache.hits" { sum += $9 } END { print sum + 0 }' "$WORKDIR/perf-round2")
+MISSES2=$(awk -F '\t' '$6 == "file_cache.misses" { sum += $9 } END { print sum + 0 }' "$WORKDIR/perf-round2")
+READ1=$(awk -F '\t' '$6 == "ext4.read_bytes" { sum += $9 } END { print sum + 0 }' "$WORKDIR/perf-round1")
+READ2=$(awk -F '\t' '$6 == "ext4.read_bytes" { sum += $9 } END { print sum + 0 }' "$WORKDIR/perf-round2")
 HITS1=${HITS1:-0}; MISSES1=${MISSES1:-0}
 HITS2=${HITS2:-0}; MISSES2=${MISSES2:-0}
 READ1=${READ1:-0}; READ2=${READ2:-0}

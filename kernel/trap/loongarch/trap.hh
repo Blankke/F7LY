@@ -17,7 +17,7 @@ public:
     void usertrap();    // 用户态中断处理
     void usertrapret(); // 用户态返回处理
     void machine_trap();
-    void kerneltrap();  // 内核态中断处理
+    void kerneltrap(const uint64 *saved_frame);  // 内核态中断处理
 private:
     // void syscall();     // 系统调用处理
     void timertick();   // 时钟中断处理

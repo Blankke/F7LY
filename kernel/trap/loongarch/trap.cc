@@ -135,6 +135,9 @@ void trap_manager::init()
 void trap_manager::inithart()
 {
   uint32 ecfg = (0U << CSR_ECFG_VS_SHIFT) | HWI_VEC | TI_VEC | IPI_VEC;
+#if F7LY_PERF_DIAG
+  ecfg |= (1U << 10); // PMCOV
+#endif
   // LoongArch 的 timer CSR 直接按周期数编程。这里必须与 tmm::cycles_per_tick()
   // 保持一致，否则 sleep()/CPU 计时/interval timer 会共同漂移，
   // 用户可见的定时器精度会被放大到错误量级。
@@ -175,6 +178,13 @@ int trap_manager::devintr()
       return 3;
     }
   }
+
+#if F7LY_PERF_DIAG
+  if (estat & ecfg & (1U << 10))
+  {
+    return 4;
+  }
+#endif
 
   if (estat & ecfg & HWI_VEC)
   {
@@ -468,6 +478,15 @@ void trap_manager::usertrap()
     p->_killed = 1; // loongarch这里先不改, riscv的改为使用scuase判断信号 @todo
   }
 
+  if (which_dev == 2)
+  {
+    perfdiag::on_timer_interrupt(false, p->_trapframe->era, 0);
+  }
+  else if (which_dev == 4)
+  {
+    perfdiag::on_pmu_interrupt(false, p->_trapframe->era, 0);
+  }
+
   if (which_dev == 2 && p->_last_user_tick > 0 && cur_tick == p->_last_user_tick)
   {
     // LoongArch 这里和 RISC-V 一样，timer tick 是在 devintr() 里推进的。
@@ -642,7 +661,7 @@ void trap_manager::machine_trap()
 }
 // 处理内核态的中断
 // 支持嵌套中断
-void trap_manager::kerneltrap()
+void trap_manager::kerneltrap(const uint64 *saved_frame)
 {
   // printf("==kerneltrap==\n");
   // 这些寄存器可能在yield时被修改
@@ -660,6 +679,16 @@ void trap_manager::kerneltrap()
   if ((which_dev = devintr()) == 0)
   {
     /// TODO: pthread_cond_smasher 会在这里panic，但是不panic也没有什么问题，先暂时删掉这部分代码
+  }
+
+  if (which_dev == 2)
+  {
+    // kernelvec 保存的 fp 位于偏移 168；ERA 是原始被中断 PC。
+    perfdiag::on_timer_interrupt(true, era, saved_frame != nullptr ? saved_frame[21] : 0);
+  }
+  else if (which_dev == 4)
+  {
+    perfdiag::on_pmu_interrupt(true, era, saved_frame != nullptr ? saved_frame[21] : 0);
   }
 
   ///@todo!! 写完进程后修改

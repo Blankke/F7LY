@@ -24,6 +24,11 @@ namespace syscall
     public:
         void init();             // 使用构造函数进行init
         void invoke_syscaller(); // 调用系统调用
+        const char *syscall_name(uint64 number) const
+        {
+            return number < max_syscall_funcs_num && _syscall_name[number] != nullptr
+                       ? _syscall_name[number] : "unknown";
+        }
         SyscallHandler()
         {
         }

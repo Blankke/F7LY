@@ -22,6 +22,7 @@
 #include "tm/timer_manager.hh"
 #include "shm/shm_manager.hh"
 #include "hal/cpu.hh"
+#include "sys/syscall_handler.hh"
 #define min(a, b) ((a) < (b) ? (a) : (b))
 
 namespace fs
@@ -176,6 +177,47 @@ namespace fs
             return true;
         }
 
+#if F7LY_PERF_DIAG
+        bool copy_perf_token(const char *&cursor, char *out, size_t capacity)
+        {
+            size_t length = 0;
+            while (*cursor != '\0' && *cursor != ' ')
+            {
+                if (length + 1 >= capacity)
+                    return false;
+                out[length++] = *cursor++;
+            }
+            out[length] = '\0';
+            return length != 0;
+        }
+
+        bool consume_perf_literal(const char *&cursor, const char *literal)
+        {
+            const size_t length = strlen(literal);
+            if (strncmp(cursor, literal, length) != 0)
+                return false;
+            cursor += length;
+            return true;
+        }
+
+        bool parse_perf_u64(const char *&cursor, uint64 &value)
+        {
+            if (*cursor < '0' || *cursor > '9')
+                return false;
+            uint64 parsed = 0;
+            do
+            {
+                const uint64 digit = static_cast<uint64>(*cursor - '0');
+                if (parsed > (static_cast<uint64>(-1) - digit) / 10)
+                    return false;
+                parsed = parsed * 10 + digit;
+                ++cursor;
+            } while (*cursor >= '0' && *cursor <= '9');
+            value = parsed;
+            return true;
+        }
+#endif
+
         bool parse_timens_offset_record(const char *buffer, int &clock_id, int64 &sec, int64 &nsec)
         {
             const char *cursor = buffer;
@@ -253,111 +295,228 @@ namespace fs
 #if F7LY_PERF_DIAG
     eastl::string ProcF7lyPerfProvider::generate_content()
     {
-        using perfdiag::Counter;
-        struct CounterName
-        {
-            Counter counter;
-            const char *name;
-            bool use_max;
-        };
-        static constexpr CounterName counters[] = {
-            {Counter::UserTrap, "trap.user", false},
-            {Counter::Syscall, "syscall.total", false},
-            {Counter::SyscallCycles, "syscall.cycles", false},
-            {Counter::PageFault, "fault.total", false},
-            {Counter::PageFaultCycles, "fault.cycles", false},
-            {Counter::PageTableWalk, "pagetable.walk", false},
-            {Counter::ProcessExit, "process.exit", false},
-            {Counter::ProcessExitCycles, "process.exit_cycles", false},
-            {Counter::VmunmapCall, "vmunmap.calls", false},
-            {Counter::VmunmapPages, "vmunmap.pages", false},
-            {Counter::VmunmapSparsePages, "vmunmap.sparse_pages", false},
-            {Counter::TeardownUnmapPages, "vmunmap.teardown_pages", false},
-            {Counter::TlbFlush, "tlb.flush", false},
-            {Counter::TlbFullFlush, "tlb.full_flush", false},
-            {Counter::TlbRemoteCpu, "tlb.remote_cpus", false},
-            {Counter::PmmAllocPage, "pmm.alloc_pages", false},
-            {Counter::PmmFreePage, "pmm.free_pages", false},
-            {Counter::PmmReleaseRef, "pmm.release_refs", false},
-            {Counter::PmmBatchReleaseRef, "pmm.batch_release_refs", false},
-            {Counter::TrapframeMapCheck, "trapframe.map_checks", false},
-            {Counter::TrapframeRemap, "trapframe.remaps", false},
-            {Counter::FileFault, "file_fault.total", false},
-            {Counter::FileFaultReadBytes, "file_fault.read_bytes", false},
-            {Counter::FileCacheHit, "file_cache.hits", false},
-            {Counter::FileCacheMiss, "file_cache.misses", false},
-            {Counter::FileCacheEvict, "file_cache.evicts", false},
-            {Counter::FileCacheReadaheadPages, "file_cache.readahead_pages", false},
-            {Counter::SysIoPoolHit, "sysio.pool_hits", false},
-            {Counter::SysIoPoolMiss, "sysio.pool_misses", false},
-            {Counter::SysIoTempAlloc, "sysio.temp_allocs", false},
-            {Counter::SysIoTempBytes, "sysio.temp_bytes", false},
-            {Counter::Ext4ReadBytes, "ext4.read_bytes", false},
-            {Counter::Ext4WriteBytes, "ext4.write_bytes", false},
-            {Counter::Ext4LockWaitCycles, "ext4.lock_wait_cycles", false},
-            {Counter::BlockRequest, "block.requests", false},
-            {Counter::BlockRequestBytes, "block.bytes", false},
-            {Counter::BlockWaitCycles, "block.wait_cycles", false},
-            {Counter::BlockMaxInflight, "block.max_inflight", true},
-            {Counter::SchedulerIdle, "scheduler.idle", false},
-            {Counter::SchedulerSwitch, "scheduler.switches", false},
-        };
-
         eastl::string result;
-        result.reserve(4096);
-        char line[128];
-        for (const CounterName &entry : counters)
+        result.reserve(content_ == PerfProcContent::Profile ? 16384 : 4096);
+        char line[512];
+        result += "f7ly-perf-v1\t";
+        const uint64 snapshot = perfdiag::next_snapshot_id();
+        const uint64 now = perfdiag::timestamp();
+
+        if (content_ == PerfProcContent::Meta)
         {
-            const uint64 value = entry.use_max
-                                     ? perfdiag::counter_max(entry.counter)
-                                     : perfdiag::counter_sum(entry.counter);
-            snprintf(line, sizeof(line), "%s %lu\n", entry.name, value);
+            const perfdiag::ProfileConfig config = perfdiag::profile_config();
+            result += "meta\nkey\tvalue\n";
+            result += "abi_version\t1\n";
+#ifdef RISCV
+            result += "architecture\triscv64\n";
+#else
+            result += "architecture\tloongarch64\n";
+#endif
+            snprintf(line, sizeof(line),
+                     "cpu_count\t%d\ntimebase_hz\t%lu\nflat_capacity_per_cpu\t%lu\n"
+                     "callchain_capacity_per_cpu\t%lu\ncallchain_max_depth\t%lu\n"
+                     "metrics_epoch\t%lu\nprofile_epoch\t%lu\n"
+                     "timer_frequencies_hz\t1,2,5,10,20,25,50,100\n"
+                     "pmu_cycles\t%s\npmu_instructions\t%s\n"
+                     "profile_active\t%d\nprofile_requested_backend\t%s\n"
+                     "profile_active_backend\t%s\nprofile_event\t%s\n"
+                     "profile_frequency_hz\t%u\nprofile_period\t%lu\nprofile_callchain\t%d\n",
+                     Cpu::online_cpu_count(), perfdiag::timebase_hz(),
+                     perfdiag::k_flat_capacity, perfdiag::k_callchain_capacity,
+                     perfdiag::k_callchain_depth, perfdiag::metrics_epoch(),
+                     perfdiag::profile_epoch(),
+                     perfdiag::pmu_available(perfdiag::ProfileEvent::CpuCycles) ? "available" : "unavailable",
+                     perfdiag::pmu_available(perfdiag::ProfileEvent::Instructions) ? "available" : "unavailable",
+                     config.active ? 1 : 0,
+                     perfdiag::backend_name(config.requested_backend),
+                     perfdiag::backend_name(config.active_backend),
+                     perfdiag::event_name(config.event), config.frequency,
+                     config.period, config.callchain ? 1 : 0);
             result += line;
+            return result;
         }
 
-        // 只输出调用次数最高的 16 个 syscall，避免 proc 文件膨胀到数百行。
-        bool emitted[512]{};
-        for (int rank = 0; rank < 16; ++rank)
+        if (content_ == PerfProcContent::Metrics)
         {
-            uint64 best_number = 0;
-            uint64 best_count = 0;
-            for (uint64 number = 0; number < 512; ++number)
+            result += "metrics\n";
+            result += "snapshot_id\tepoch\ttimestamp_ticks\tcpu\tid\tname\tkind\tunit\tvalue\n";
+            const uint64 epoch = perfdiag::metrics_epoch();
+            const uint64 online = Cpu::online_cpu_mask();
+            for (uint64 cpu = 0; cpu < NUMCPU; ++cpu)
             {
-                if (emitted[number])
-                {
+                if ((online & (1ULL << cpu)) == 0)
                     continue;
-                }
-                const uint64 count = perfdiag::syscall_count_sum(number);
-                if (count > best_count)
+                for (uint64 id = 0; id < perfdiag::descriptor_count(); ++id)
                 {
-                    best_count = count;
-                    best_number = number;
+                    const perfdiag::MetricDescriptor &desc = perfdiag::descriptor(id);
+                    const char *kind = desc.kind == perfdiag::MetricKind::Duration ? "duration" :
+                                       desc.kind == perfdiag::MetricKind::Gauge ? "gauge" : "counter";
+                    snprintf(line, sizeof(line), "%lu\t%lu\t%lu\t%lu\t%lu\t%s\t%s\t%s\t%lu\n",
+                             snapshot, epoch, now, cpu, id, desc.name, kind, desc.unit,
+                             perfdiag::counter_cpu(desc.counter, cpu));
+                    result += line;
                 }
             }
-            if (best_count == 0)
-            {
-                break;
-            }
-            emitted[best_number] = true;
-            snprintf(line,
-                     sizeof(line),
-                     "syscall.%lu count=%lu cycles=%lu\n",
-                     best_number,
-                     best_count,
-                     perfdiag::syscall_cycles_sum(best_number));
-            result += line;
+            return result;
         }
+
+        if (content_ == PerfProcContent::Syscalls)
+        {
+            result += "syscalls\n";
+            result += "snapshot_id\tepoch\ttimestamp_ticks\tcpu\tnumber\tname\tcount\ttime_ticks\n";
+            const uint64 epoch = perfdiag::metrics_epoch();
+            const uint64 online = Cpu::online_cpu_mask();
+            for (uint64 cpu = 0; cpu < NUMCPU; ++cpu)
+            {
+                if ((online & (1ULL << cpu)) == 0)
+                    continue;
+                for (uint64 number = 0; number < perfdiag::k_syscall_slots; ++number)
+                {
+                    const uint64 count = perfdiag::syscall_count_cpu(number, cpu);
+                    if (count == 0)
+                        continue;
+                    snprintf(line, sizeof(line), "%lu\t%lu\t%lu\t%lu\t%lu\t%s\t%lu\t%lu\n",
+                             snapshot, epoch, now, cpu, number,
+                             syscall::k_syscall_handler.syscall_name(number), count,
+                             perfdiag::syscall_time_ticks_cpu(number, cpu));
+                    result += line;
+                }
+            }
+            return result;
+        }
+
+        if (content_ == PerfProcContent::Profile)
+        {
+            result += "profile\n";
+            result += "snapshot_id\tepoch\ttimestamp_ticks\trecord\tcpu\tcount\tdepth\tpcs\n";
+            const uint64 epoch = perfdiag::profile_epoch();
+            const uint64 online = Cpu::online_cpu_mask();
+            for (uint64 cpu = 0; cpu < NUMCPU; ++cpu)
+            {
+                if ((online & (1ULL << cpu)) == 0)
+                    continue;
+                snprintf(line, sizeof(line), "%lu\t%lu\t%lu\tstats\t%lu\t%lu\t0\t"
+                         "dropped_full=%lu,invalid_pc=%lu,user_skipped=%lu,unwind_failed=%lu\n",
+                         snapshot, epoch, now, cpu, perfdiag::profile_samples_cpu(cpu),
+                         perfdiag::profile_dropped_full_cpu(cpu), perfdiag::profile_invalid_pc_cpu(cpu),
+                         perfdiag::profile_user_skipped_cpu(cpu), perfdiag::profile_unwind_failed_cpu(cpu));
+                result += line;
+                for (uint64 index = 0; index < perfdiag::k_flat_capacity; ++index)
+                {
+                    perfdiag::FlatSample sample{};
+                    if (!perfdiag::flat_sample(cpu, index, sample))
+                        continue;
+                    snprintf(line, sizeof(line), "%lu\t%lu\t%lu\tflat\t%lu\t%lu\t1\t0x%lx\n",
+                             snapshot, epoch, now, cpu, sample.count, sample.pc);
+                    result += line;
+                }
+                for (uint64 index = 0; index < perfdiag::k_callchain_capacity; ++index)
+                {
+                    perfdiag::CallchainSample sample{};
+                    if (!perfdiag::callchain_sample(cpu, index, sample))
+                        continue;
+                    snprintf(line, sizeof(line), "%lu\t%lu\t%lu\tcallchain\t%lu\t%lu\t%u\t",
+                             snapshot, epoch, now, cpu, sample.count, sample.depth);
+                    result += line;
+                    for (uint8 depth = 0; depth < sample.depth; ++depth)
+                    {
+                        snprintf(line, sizeof(line), "%s0x%lx", depth == 0 ? "" : ",", sample.pcs[depth]);
+                        result += line;
+                    }
+                    result += "\n";
+                }
+            }
+            return result;
+        }
+
+        if (content_ == PerfProcContent::Symbols)
+        {
+            result += "symbols\nstart\tend\tdemangled_name\n";
+            for (uint64 index = 0; index < perfdiag::symbol_count(); ++index)
+            {
+                uint64 start = 0;
+                uint64 end = 0;
+                const char *name = nullptr;
+                if (perfdiag::symbol_at(index, start, end, name))
+                {
+                    // demangle 后的 C++ 模板名可能远超固定行缓冲；分段追加可避免
+                    // 截断时丢失换行并把相邻 TSV 记录粘连。
+                    snprintf(line, sizeof(line), "0x%lx\t0x%lx\t", start, end);
+                    result += line;
+                    result += name;
+                    result += "\n";
+                }
+            }
+            return result;
+        }
+
+        result += "control\ncommand\n";
+        result += "metrics reset\nprofile reset\nprofile stop\n";
+        result += "profile start backend=<auto|timer|pmu> event=<cycles|instructions> frequency=<Hz> period=<N> callchain=<0|1>\n";
+        result += "all reset\n";
         return result;
     }
 
-    long ProcF7lyPerfProvider::handle_write(uint64, size_t len, long off)
+    long ProcF7lyPerfProvider::handle_write(uint64 buf, size_t len, long off)
     {
-        if (off != 0 || len == 0)
-        {
+        if (content_ != PerfProcContent::Control || buf == 0 || off != 0 || len == 0 || len >= 256)
             return -EINVAL;
+
+        const size_t original_len = len;
+        char command[256];
+        memcpy(command, reinterpret_cast<const void *>(buf), len);
+        command[len] = '\0';
+        if (len > 0 && command[len - 1] == '\n')
+            command[--len] = '\0';
+        if (len == 0 || strchr(command, '\n') != nullptr || strchr(command, '\r') != nullptr)
+            return -EINVAL;
+
+        if (strcmp(command, "metrics reset") == 0)
+            perfdiag::reset_metrics();
+        else if (strcmp(command, "profile reset") == 0)
+            perfdiag::reset_profile();
+        else if (strcmp(command, "profile stop") == 0)
+            perfdiag::profile_stop();
+        else if (strcmp(command, "all reset") == 0)
+            perfdiag::reset_all();
+        else
+        {
+            constexpr const char *prefix = "profile start backend=";
+            if (strncmp(command, prefix, strlen(prefix)) != 0)
+                return -EINVAL;
+            const char *cursor = command + strlen(prefix);
+            char backend[16]{};
+            char event[16]{};
+            uint64 frequency = 0;
+            uint64 period = 0;
+            uint64 callchain = 0;
+            if (!copy_perf_token(cursor, backend, sizeof(backend)) ||
+                !consume_perf_literal(cursor, " event=") ||
+                !copy_perf_token(cursor, event, sizeof(event)) ||
+                !consume_perf_literal(cursor, " frequency=") ||
+                !parse_perf_u64(cursor, frequency) ||
+                !consume_perf_literal(cursor, " period=") ||
+                !parse_perf_u64(cursor, period) ||
+                !consume_perf_literal(cursor, " callchain=") ||
+                !parse_perf_u64(cursor, callchain) || *cursor != '\0' ||
+                frequency > 0xffffffffULL || callchain > 1)
+                return -EINVAL;
+            perfdiag::ProfileBackend parsed_backend;
+            if (strcmp(backend, "auto") == 0) parsed_backend = perfdiag::ProfileBackend::Auto;
+            else if (strcmp(backend, "timer") == 0) parsed_backend = perfdiag::ProfileBackend::Timer;
+            else if (strcmp(backend, "pmu") == 0) parsed_backend = perfdiag::ProfileBackend::Pmu;
+            else return -EINVAL;
+            perfdiag::ProfileEvent parsed_event;
+            if (strcmp(event, "cycles") == 0) parsed_event = perfdiag::ProfileEvent::CpuCycles;
+            else if (strcmp(event, "instructions") == 0) parsed_event = perfdiag::ProfileEvent::Instructions;
+            else return -EINVAL;
+            const int rc = perfdiag::profile_start(parsed_backend, parsed_event,
+                                                   static_cast<uint32>(frequency), period,
+                                                   callchain != 0);
+            if (rc < 0)
+                return rc;
         }
-        perfdiag::reset();
-        return static_cast<long>(len);
+        return static_cast<long>(original_len);
     }
 #endif
 

@@ -44,6 +44,8 @@ kernelvec:
         sd t5, 232(sp)
         sd t6, 240(sp)
 
+	// 把被中断寄存器帧传给 C++ 采样器；a0 原值已经保存在 72(sp)。
+        mv a0, sp
 	// call the C trap handler in trap_func_wrapper.cc
         call wrap_kerneltrap
 

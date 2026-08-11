@@ -878,7 +878,7 @@ namespace mem
     int VirtualMemoryManager::allocate_vma_page(PageTable &pt, uint64 va, proc::vma *vm, int access_type)
     {
         F7LY_PERF_ADD(PageFault, 1);
-        perfdiag::CycleScope perf_fault_scope(perfdiag::Counter::PageFaultCycles);
+        F7LY_PERF_SCOPE(PageFaultTimeTicks);
         uint64 page_va = PGROUNDDOWN(va);
 
         // 线程并发 fault 同一页时，另一个线程可能已经先一步把叶子 PTE 补好了。

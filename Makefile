@@ -15,7 +15,7 @@ NPROC := $(shell nproc)
 # 交互式 QEMU 运行目标需要独占宿主机 stdin；如果顶层 make 全局强制 -j，
 # GNU make 可能会把配方的标准输入重定向掉，导致 shell 模式下 guest 完全收不到按键。
 # 因此只对纯构建目标启用并行，run/shell/debug 自己在子 make 中显式并行编译。
-PARALLEL_BUILD_GOALS := all build build-la riscv loongarch clean dirs initcode
+PARALLEL_BUILD_GOALS := all build build-la riscv loongarch clean dirs initcode perf-tool perf-tools
 ifeq ($(strip $(MAKECMDGOALS)),)
   MAKEFLAGS += -j$(NPROC)
 else ifneq ($(filter $(PARALLEL_BUILD_GOALS),$(MAKECMDGOALS)),)
@@ -115,6 +115,7 @@ endif
 # 性能诊断默认完全关闭；只有定向 A/B 内核显式 PERF_DIAG=1 时才编译计数热路径。
 ifeq ($(PERF_DIAG),1)
   BUILD_CPPFLAGS += -DF7LY_PERF_DIAG=1
+  KERNEL_CFLAGS_EXTRA := -fno-omit-frame-pointer -fno-optimize-sibling-calls
   # 诊断与正式对象分开，避免 make 在 CFLAGS 变化时误用旧 .o。
   OUTPUT_PREFIX := $(OUTPUT_PREFIX)-perf
   KERNEL_NAME_SUFFIX := $(KERNEL_NAME_SUFFIX)-perf
@@ -140,7 +141,7 @@ SUBDIRS := $(ARCH_DIRS) $(COMMON_DIRS)
 LINK_SCRIPT := $(KERNEL_DIR)/link/$(ARCH)/kernel.ld
 
 KERNEL_CFLAGS := -Wall -Werror -ffreestanding -O2 -fno-builtin -g -fno-stack-protector \
-				 $(KERNEL_ARCH_CFLAGS) $(BUILD_CPPFLAGS)
+				 $(KERNEL_ARCH_CFLAGS) $(BUILD_CPPFLAGS) $(KERNEL_CFLAGS_EXTRA)
 ifeq ($(ARCH),riscv)
   EA_PLATFORM := -DEA_PROCESSOR_RISCV
 else ifeq ($(ARCH),loongarch)
@@ -221,6 +222,9 @@ else ifeq ($(ARCH),loongarch)
   KERNEL_BIN := kernel-la$(KERNEL_NAME_SUFFIX).bin
 endif
 KERNEL_FP_GATE_STAMP := $(BUILD_DIR)/.kernel-no-fp
+KERNEL_PRELINK := $(BUILD_DIR)/kernel-perf-prelink
+PERF_SYMBOL_ASM := $(BUILD_DIR)/perf_symbols.S
+PERF_SYMBOL_OBJ := $(BUILD_DIR)/perf_symbols.o
 
 # ===== initcode 用户进程编译相关 =====
 # 支持 riscv 和 loongarch 架构，自动选择交叉工具链和参数
@@ -330,12 +334,31 @@ $(INITCODE_CONFIG_STAMP): FORCE Makefile
 $(OBJS): $(KERNEL_CONFIG_STAMP)
 $(INITCODE_OBJ) $(SYSCALL_OBJ) $(PRINTF_OBJ) $(FUCKYOU_OBJ) $(USER_TEST_OBJ): $(INITCODE_CONFIG_STAMP)
 
-.PHONY: all clean dirs build riscv loongarch run shell debug initcode build-la check-kernel-no-fp
+.PHONY: all clean dirs build riscv loongarch run shell debug initcode build-la check-kernel-no-fp perf-tool perf-tools perf-native-tests
+
+PERF_TOOL_SRC := tools/perf/f7ly_perf.cc
+PERF_TOOL_BIN := build/perf-tools/f7ly-perf-$(ARCH)
 
 
 all: 
 	@$(MAKE) riscv loongarch
 	@if [ -f $(ROOTFS_BACKUP) ]; then cp $(ROOTFS_BACKUP) $(ROOTFS_IMAGE); fi
+
+perf-tool: $(PERF_TOOL_BIN)
+
+perf-tools:
+	@$(MAKE) perf-tool ARCH=riscv
+	@$(MAKE) perf-tool ARCH=loongarch
+
+perf-native-tests: tools/perf/f7ly_perf.cc tools/perf/f7ly_perf_native_test.cc kernel/libs/perf_diag_algorithms.hh
+	@mkdir -p build/perf-tools
+	g++ -std=c++17 -O2 -Wall -Wextra -Werror -Wno-unused-function -Ikernel tools/perf/f7ly_perf_native_test.cc \
+		-o build/perf-tools/f7ly-perf-native-test
+	@build/perf-tools/f7ly-perf-native-test
+
+$(PERF_TOOL_BIN): $(PERF_TOOL_SRC)
+	@mkdir -p $(dir $@)
+	$(CROSS_COMPILE)g++ -std=c++17 -O2 -Wall -Wextra -Werror -static $< -o $@
 
 
 riscv:
@@ -397,9 +420,22 @@ $(BUILD_DIR)/%.o: $(KERNEL_DIR)/%.s
 	@mkdir -p $(dir $@)
 	$(CC) $(KERNEL_CFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
 
-$(KERNEL_ELF): $(ENTRY_OBJ) $(OBJS_NO_ENTRY) $(BUILD_DIR)/$(EASTL_DIR)/libeastl.a $(LINK_SCRIPT)
+$(KERNEL_ELF): $(ENTRY_OBJ) $(OBJS_NO_ENTRY) $(BUILD_DIR)/$(EASTL_DIR)/libeastl.a $(LINK_SCRIPT) scripts/generate_perf_symbols.sh
 	@mkdir -p $(dir $@)
+ifeq ($(PERF_DIAG),1)
+	$(LD) $(KERNEL_LDFLAGS) \
+		-Wl,--defsym,__f7ly_perf_symbols_start=0 \
+		-Wl,--defsym,__f7ly_perf_symbols_end=0 \
+		-Wl,--defsym,__f7ly_perf_symbol_names_start=0 \
+		-o $(KERNEL_PRELINK) $(ENTRY_OBJ) $(OBJS_NO_ENTRY) $(BUILD_DIR)/$(EASTL_DIR)/libeastl.a
+	@scripts/generate_perf_symbols.sh generate $(CROSS_COMPILE) $(KERNEL_PRELINK) $(PERF_SYMBOL_ASM)
+	$(CC) $(KERNEL_CFLAGS) -c $(PERF_SYMBOL_ASM) -o $(PERF_SYMBOL_OBJ)
+	$(LD) $(KERNEL_LDFLAGS) -o $@ $(ENTRY_OBJ) $(OBJS_NO_ENTRY) \
+		$(BUILD_DIR)/$(EASTL_DIR)/libeastl.a $(PERF_SYMBOL_OBJ)
+	@scripts/generate_perf_symbols.sh verify $(CROSS_COMPILE) $(KERNEL_PRELINK) $@
+else
 	$(LD) $(KERNEL_LDFLAGS) -o $@ $(ENTRY_OBJ) $(OBJS_NO_ENTRY) $(BUILD_DIR)/$(EASTL_DIR)/libeastl.a
+endif
 	$(SIZE) $@
 # 	$(OBJDUMP) -D $@ > kernel.asm
 # 	riscv64-linux-gnu-objdump -D kernel-rv > kernel.asm

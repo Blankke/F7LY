@@ -56,8 +56,8 @@ echo "BUILDSTORM_BEGIN mode=multi"
 
 # 诊断计数仅在 PERF_DIAG=1 内核中存在。写入只是重置快照，
 # 不修改 Cargo 负载或计时源。
-if [ -e /proc/f7ly/perf ]; then
-    echo reset >/proc/f7ly/perf 2>/dev/null || true
+if command -v f7ly-perf >/dev/null 2>&1; then
+    f7ly-perf reset all 2>/dev/null || true
 fi
 
 PROFILE_DONE=/tmp/buildstorm_formal_profile.done
@@ -70,9 +70,10 @@ rm -f "$PROFILE_DONE"
         echo "BUILDSTORM_PROFILE sample=$SAMPLE uptime=$UPTIME artifacts=$ARTIFACTS"
         ps -eo pid,ppid,stat,psr,pcpu,time,comm 2>/dev/null |
             awk 'NR == 1 || $7 == "cargo" || $7 == "rustc" || $7 == "cc" || $7 == "ld"'
-        if [ -e /proc/f7ly/perf ]; then
+        if command -v f7ly-perf >/dev/null 2>&1; then
             echo "BUILDSTORM_PERF_SNAPSHOT_BEGIN sample=$SAMPLE"
-            cat /proc/f7ly/perf 2>/dev/null
+            f7ly-perf status --json 2>/dev/null
+            f7ly-perf stat --interval-ms 10 --count 1 --json 2>/dev/null
             echo "BUILDSTORM_PERF_SNAPSHOT_END sample=$SAMPLE"
         fi
         SAMPLE=$((SAMPLE + 1))
@@ -84,6 +85,9 @@ PROFILE_PID=$!
 T0_EPOCH=$(date +%s)
 T0=$(cut -d' ' -f1 /proc/uptime 2>/dev/null)
 rm -f /work/.build.rc
+BUILD_COMMAND=/tmp/f7ly-buildstorm-profile-command.sh
+cat >"$BUILD_COMMAND" <<'F7LY_BUILD_COMMAND_EOF'
+#!/bin/sh
 {
     timeout 14400 cargo xtask arceos build -p arceos-helloworld --arch "$AXARCH" 2>&1
     echo $? >/work/.build.rc
@@ -96,6 +100,15 @@ rm -f /work/.build.rc
         fflush()
     }
 ' | tee /work/buildstorm.build.out
+F7LY_BUILD_COMMAND_EOF
+chmod 0700 "$BUILD_COMMAND"
+export AXARCH T0_EPOCH
+if command -v f7ly-perf >/dev/null 2>&1; then
+    f7ly-perf top --backend auto --event cycles --frequency 100 --period 1000000 \
+        --limit 20 -- /bin/sh "$BUILD_COMMAND"
+else
+    /bin/sh "$BUILD_COMMAND"
+fi
 
 touch "$PROFILE_DONE"
 kill "$PROFILE_PID" 2>/dev/null || true
@@ -120,9 +133,11 @@ else
     FINAL_RC=1
 fi
 
-if [ -e /proc/f7ly/perf ]; then
+if command -v f7ly-perf >/dev/null 2>&1; then
     echo "BUILDSTORM_PERF_FINAL_BEGIN"
-    cat /proc/f7ly/perf 2>/dev/null
+    f7ly-perf status --json 2>/dev/null
+    cat /proc/f7ly/perf/metrics 2>/dev/null
+    cat /proc/f7ly/perf/syscalls 2>/dev/null
     echo "BUILDSTORM_PERF_FINAL_END"
 fi
 if [ "$FINAL_RC" -eq 0 ]; then

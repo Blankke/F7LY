@@ -3890,7 +3890,7 @@ namespace proc
         p->cleanup_memory_manager(); // 释放所有内存资源（VMA、程序段、堆、页表、trapframe等）
 #if F7LY_PERF_DIAG
         const uint64 exit_end = perfdiag::timestamp();
-        F7LY_PERF_ADD(ProcessExitCycles,
+        F7LY_PERF_ADD(ProcessExitTimeTicks,
                       exit_end >= exit_begin ? exit_end - exit_begin : 0);
 #endif
 

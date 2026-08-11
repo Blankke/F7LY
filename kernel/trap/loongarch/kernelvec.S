@@ -51,6 +51,8 @@ kernelvec:
         // 这里在进 C 之前强制从 CSR 重新取一次 cpuid，避免 kerneltrap() 里
         // 通过 tp 取 Cpu::get_cpu() 时读到用户 TLS 指针。
         csrrd $tp, LOONGARCH_CSR_CPUID
+        // 把被中断寄存器帧传给 C++ 采样器；a0 原值已经保存在 24(sp)。
+        addi.d $a0, $sp, 0
         bl wrap_kerneltrap
 
         // restore register

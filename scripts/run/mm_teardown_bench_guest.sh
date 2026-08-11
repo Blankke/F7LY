@@ -150,16 +150,17 @@ if ! cc -O2 -Wall -Wextra "$WORKDIR/bench.c" -o "$WORKDIR/bench"; then
     exit 1
 fi
 
-if [ -e /proc/f7ly/perf ]; then
-    echo reset >/proc/f7ly/perf 2>/dev/null || true
+if command -v f7ly-perf >/dev/null 2>&1; then
+    f7ly-perf reset metrics 2>/dev/null || true
 fi
 
 "$WORKDIR/bench"
 RC=$?
 
-if [ -e /proc/f7ly/perf ]; then
+if command -v f7ly-perf >/dev/null 2>&1; then
     echo "MM_TEARDOWN_PERF_BEGIN"
-    cat /proc/f7ly/perf 2>/dev/null
+    cat /proc/f7ly/perf/metrics 2>/dev/null
+    cat /proc/f7ly/perf/syscalls 2>/dev/null
     echo "MM_TEARDOWN_PERF_END"
 fi
 

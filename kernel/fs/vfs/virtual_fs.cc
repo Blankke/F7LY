@@ -387,8 +387,19 @@ namespace fs
         add_virtual_file("/proc/uptime", fs::FileTypes::FT_NORMAL,
                          eastl::make_unique<ProcUptimeProvider>());
 #if F7LY_PERF_DIAG
-        add_virtual_file("/proc/f7ly/perf", fs::FileTypes::FT_NORMAL,
-                         eastl::make_unique<ProcF7lyPerfProvider>());
+        add_virtual_file("/proc/f7ly/perf", fs::FileTypes::FT_DIRECT, nullptr);
+        add_virtual_file("/proc/f7ly/perf/meta", fs::FileTypes::FT_NORMAL,
+                         eastl::make_unique<ProcF7lyPerfProvider>(PerfProcContent::Meta));
+        add_virtual_file("/proc/f7ly/perf/metrics", fs::FileTypes::FT_NORMAL,
+                         eastl::make_unique<ProcF7lyPerfProvider>(PerfProcContent::Metrics));
+        add_virtual_file("/proc/f7ly/perf/syscalls", fs::FileTypes::FT_NORMAL,
+                         eastl::make_unique<ProcF7lyPerfProvider>(PerfProcContent::Syscalls));
+        add_virtual_file("/proc/f7ly/perf/profile", fs::FileTypes::FT_NORMAL,
+                         eastl::make_unique<ProcF7lyPerfProvider>(PerfProcContent::Profile));
+        add_virtual_file("/proc/f7ly/perf/symbols", fs::FileTypes::FT_NORMAL,
+                         eastl::make_unique<ProcF7lyPerfProvider>(PerfProcContent::Symbols));
+        add_virtual_file("/proc/f7ly/perf/control", fs::FileTypes::FT_NORMAL,
+                         eastl::make_unique<ProcF7lyPerfProvider>(PerfProcContent::Control));
 #endif
         add_virtual_file("/proc/net/tcp", fs::FileTypes::FT_NORMAL,
                          eastl::make_unique<ProcNetTcpProvider>(false));
@@ -748,7 +759,14 @@ namespace fs
             attrs._value = 0666;
             break;
         default:
-            attrs._value = 0644;
+#if F7LY_PERF_DIAG
+            if (absolute_path == "/proc/f7ly/perf/control")
+                attrs._value = 0600;
+            else if (absolute_path.find("/proc/f7ly/perf/") == 0)
+                attrs._value = 0444;
+            else
+#endif
+                attrs._value = 0644;
             break;
         }
         file = new virtual_file(attrs, absolute_path, eastl::move(vf_msg.provider));
@@ -1040,6 +1058,16 @@ namespace fs
             st->dev = 0x5; // Device: 5h/5d
             st->gid = 6;   // Gid: 6 (disk)
         }
+#if F7LY_PERF_DIAG
+        else if (path == "/proc/f7ly/perf/control")
+        {
+            fill_virtual_kstat_defaults(st, S_IFREG | 0600, 0xf7c0, 0, 1);
+        }
+        else if (path.find("/proc/f7ly/perf/") == 0)
+        {
+            fill_virtual_kstat_defaults(st, S_IFREG | 0444, 0xf700, 0, 1);
+        }
+#endif
         else
         {
             // 其他虚拟节点按自身文件类型回填，避免把 /dev、/proc 这类目录错误报成普通文件。

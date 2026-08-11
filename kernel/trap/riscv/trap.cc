@@ -102,6 +102,12 @@ int trap_manager::devintr()
     return 3;
   }
 
+  if (scause == 0x800000000000000dL)
+  {
+    // Sscofpmf 本地计数器溢出中断；采样和重新装载由 perfdiag 统一处理。
+    return 4;
+  }
+
   if ((scause & 0x8000000000000000L) &&
       (scause & 0xff) == 9)
   {
@@ -202,7 +208,7 @@ void trap_manager::timertick()
 
 // 处理内核态的中断
 // 支持嵌套中断
-void trap_manager::kerneltrap()
+void trap_manager::kerneltrap(const uint64 *saved_frame)
 {
   //   printfMagenta("into kerneltrap\n");
   int which_dev = 0;
@@ -241,6 +247,16 @@ void trap_manager::kerneltrap()
     }
     panic("kerneltrap: scause=%p sepc=%p stval=%p sstatus=%p no-current-proc",
           scause, r_sepc(), r_stval(), sstatus);
+  }
+
+  if (which_dev == 2)
+  {
+    // kernelvec 保存的 s0/fp 位于第 7 个 64 位槽；sepc 是原始被中断 PC。
+    perfdiag::on_timer_interrupt(true, sepc, saved_frame != nullptr ? saved_frame[7] : 0);
+  }
+  else if (which_dev == 4)
+  {
+    perfdiag::on_pmu_interrupt(true, sepc, saved_frame != nullptr ? saved_frame[7] : 0);
   }
 
   if (which_dev == 2 && Cpu::get_cpu()->get_cur_proc() != nullptr &&
@@ -365,6 +381,16 @@ void trap_manager::usertrap()
       proc::ipc::signal::handle_sync_signal();
       break;
     }
+  }
+
+  if (which_dev == 2)
+  {
+    // 本轮只分析内核执行域，用户态 timer 命中单独计入 skipped。
+    perfdiag::on_timer_interrupt(false, p->_trapframe->epc, 0);
+  }
+  else if (which_dev == 4)
+  {
+    perfdiag::on_pmu_interrupt(false, p->_trapframe->epc, 0);
   }
 
   if (which_dev == 2 && p->_last_user_tick > 0 && cur_tick == p->_last_user_tick)

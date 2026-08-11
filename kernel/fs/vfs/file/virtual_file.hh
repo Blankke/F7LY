@@ -151,17 +151,31 @@ namespace fs
     };
 
 #if F7LY_PERF_DIAG
-    /** `/proc/f7ly/perf`：仅诊断内核可见的动态性能计数快照。 */
+    enum class PerfProcContent : uint8
+    {
+        Meta,
+        Metrics,
+        Syscalls,
+        Profile,
+        Symbols,
+        Control,
+    };
+
+    /** `/proc/f7ly/perf` 目录下各节点：诊断构建的稳定 v1 ABI。 */
     class ProcF7lyPerfProvider : public VirtualContentProvider
     {
+    private:
+        PerfProcContent content_;
+
     public:
+        explicit ProcF7lyPerfProvider(PerfProcContent content) : content_(content) {}
         eastl::string generate_content() override;
         bool is_dynamic() const override { return true; }
-        bool is_writable() const override { return true; }
+        bool is_writable() const override { return content_ == PerfProcContent::Control; }
         long handle_write(uint64 buf, size_t len, long off) override;
         eastl::unique_ptr<VirtualContentProvider> clone() const override
         {
-            return eastl::make_unique<ProcF7lyPerfProvider>();
+            return eastl::make_unique<ProcF7lyPerfProvider>(content_);
         }
     };
 #endif

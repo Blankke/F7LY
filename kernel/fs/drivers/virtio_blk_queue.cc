@@ -287,7 +287,7 @@ namespace virtio_blk
     {
         F7LY_PERF_ADD(BlockRequest, 1);
         F7LY_PERF_ADD(BlockRequestBytes, request.request_bytes);
-        perfdiag::CycleScope perf_wait(perfdiag::Counter::BlockWaitCycles);
+        F7LY_PERF_SCOPE(BlockWaitTimeTicks);
         lock_.acquire();
         scheduler_.enqueue(&request, now_us(), ewma_bps_);
         dispatch_pending_locked(nullptr);
