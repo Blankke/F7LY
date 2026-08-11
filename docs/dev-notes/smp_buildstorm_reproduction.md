@@ -5,10 +5,10 @@
 ## 1. 双架构编译
 
 ```bash
-make build ARCH=riscv INITCODE_MODE=evaluation
-make build ARCH=loongarch INITCODE_MODE=evaluation
-make build ARCH=riscv INITCODE_MODE=shell
-make build ARCH=loongarch INITCODE_MODE=shell
+make build PROFILE=riscv-qemu MODE=evaluation
+make build PROFILE=loongarch-qemu MODE=evaluation
+make build PROFILE=riscv-qemu MODE=shell
+make build PROFILE=loongarch-qemu MODE=shell
 ```
 
 ## 2. SMP CPU 吞吐与 affinity

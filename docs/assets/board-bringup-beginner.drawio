@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="drawio" version="30.2.6">
+  <diagram name="上板流程">
+    <mxGraphModel dx="1400" dy="800" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1169" pageHeight="827" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" value="F7LY 上板：电脑准备文件，U-Boot 搬进内存，内核读取硬件地图和根盘" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=20;fontStyle=1;fontColor=#1f2937;" vertex="1" parent="1">
+          <mxGeometry x="55" y="30" width="1060" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="pc" value="① 开发电脑&#xa;把源码编译成 kernel-*.bin&#xa;像把课本装进书包" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=15;fontStyle=1;spacing=8;" vertex="1" parent="1">
+          <mxGeometry x="70" y="140" width="220" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="transport" value="② 搬运文件&#xa;VisionFive2：SD 卡 FAT 分区&#xa;2K1000LA：TFTP 网络" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=15;fontStyle=1;spacing=8;" vertex="1" parent="1">
+          <mxGeometry x="350" y="140" width="220" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="uboot" value="③ U-Boot（门卫）&#xa;把内核和 DTB 搬到内存&#xa;再把控制权交给 F7LY" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=15;fontStyle=1;spacing=8;" vertex="1" parent="1">
+          <mxGeometry x="630" y="140" width="220" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="kernel" value="④ F7LY 内核&#xa;按 DTB 找内存和设备&#xa;读取根盘，最后启动 shell" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=15;fontStyle=1;spacing=8;" vertex="1" parent="1">
+          <mxGeometry x="910" y="140" width="220" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="dtb" value="DTB（硬件地图）&#xa;告诉内核：内存、CPU、设备在哪里" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=14;spacing=8;" vertex="1" parent="1">
+          <mxGeometry x="630" y="330" width="220" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="rootfs" value="根盘 ext4（工具柜）&#xa;至少要有 BusyBox、bash 或 sh" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=14;spacing=8;" vertex="1" parent="1">
+          <mxGeometry x="910" y="325" width="220" height="95" as="geometry" />
+        </mxCell>
+        <mxCell id="serial" value="串口终端（对讲机）&#xa;你从这里看日志、输入命令" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=14;spacing=8;" vertex="1" parent="1">
+          <mxGeometry x="350" y="330" width="220" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="e1" value=".bin" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;fontSize=13;" edge="1" parent="1" source="pc" target="transport">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e2" value="加载到 RAM" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;fontSize=13;" edge="1" parent="1" source="transport" target="uboot">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e3" value="booti 或 go" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;fontSize=13;" edge="1" parent="1" source="uboot" target="kernel">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e4" value="把地图地址交给内核" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;fontSize=13;" edge="1" parent="1" source="dtb" target="kernel">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="880" y="370" />
+              <mxPoint x="880" y="260" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e5" value="读取文件" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;fontSize=13;" edge="1" parent="1" source="rootfs" target="kernel">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e6" value="日志和键盘输入" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;startArrow=block;startFill=1;endArrow=block;endFill=1;strokeWidth=2;fontSize=13;" edge="1" parent="1" source="serial" target="uboot">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="note" value="最重要的区别：VisionFive2 用 booti；2K1000LA 用 go。两者都要把正确 DTB 交给内核。" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#374151;dashed=1;fontSize=15;fontStyle=1;spacing=8;" vertex="1" parent="1">
+          <mxGeometry x="280" y="480" width="610" height="60" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

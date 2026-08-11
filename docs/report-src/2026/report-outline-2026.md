@@ -158,21 +158,21 @@
 
 ##### 2.4.1 功能
 
-- `make shell r` 与 `make shell l` 使用独立 rootfs 镜像进入 BusyBox ash。
+- `make shell PROFILE=riscv-qemu` 与 `make shell PROFILE=loongarch-qemu` 使用独立 rootfs 镜像进入 BusyBox ash。
 - 支持控制台输入、termios、当前目录、环境变量、文件访问和正常退出。
-- 评测入口 `make run r/l` 保持自动回归，不与 shell 模式混用。
+- 评测入口 `make run PROFILE=<qemu画像>` 保持自动回归，不与 shell 模式混用。
 
 ##### 2.4.2 原理
 
-- Makefile 通过 `INITCODE_MODE` 选择 evaluation 或 shell initcode。
+- Makefile 通过 `MODE` 选择 evaluation 或 shell initcode。
 - UART/SBI -> console 行规程 -> device_file -> fd 0 -> BusyBox ash。
 - shell 初始化后 `execve` BusyBox，并在退出后回到 initcode。
 
 ##### 2.4.3 使用与示例
 
 ```bash
-make shell r
-make shell l
+make shell PROFILE=riscv-qemu
+make shell PROFILE=loongarch-qemu
 ```
 
 演示命令规划：`pwd`、`ls /`、`cat /proc/version`、创建并执行 `.sh` 脚本、正常 `exit`。
@@ -411,10 +411,10 @@ make shell l
 
 | 编号 | 截图内容 | 用途 | 建议来源 |
 | --- | --- | --- | --- |
-| S1 | RISC-V 启动完成、DTB、内存和 rootfs | Overview/启动改进 | `make run r` 日志 |
-| S2 | LoongArch 启动完成、DTB、内存和 rootfs | 双架构对照 | `make run l` 日志 |
-| S3 | RISC-V BusyBox ash 执行 `pwd/ls/script/exit` | 新增 shell | `make shell r` |
-| S4 | LoongArch BusyBox ash 同类操作 | shell 双架构性 | `make shell l` |
+| S1 | RISC-V 启动完成、DTB、内存和 rootfs | Overview/启动改进 | `make run PROFILE=riscv-qemu` 日志 |
+| S2 | LoongArch 启动完成、DTB、内存和 rootfs | 双架构对照 | `make run PROFILE=loongarch-qemu` 日志 |
+| S3 | RISC-V BusyBox ash 执行 `pwd/ls/script/exit` | 新增 shell | `make shell PROFILE=riscv-qemu` |
+| S4 | LoongArch BusyBox ash 同类操作 | shell 双架构性 | `make shell PROFILE=loongarch-qemu` |
 | S5 | TCP/UDP payload smoke | 真实 loopback | 单项网络自测 |
 | S6 | iperf/netperf 成功结果 | 网络吞吐与并发 | 对应回归日志 |
 | S7 | iozone 官方 judge 汇总 | I/O 性能 | 四组合结果 |

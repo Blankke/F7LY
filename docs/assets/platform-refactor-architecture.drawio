@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="drawio" version="30.2.6">
+  <diagram name="平台重构最小模型">
+    <mxGraphModel dx="1200" dy="960" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1300" pageHeight="1000" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <mxCell id="2" value="启动入口：只消化固件与架构差异" style="swimlane;startSize=30;container=1;pointerEvents=0;rounded=1;whiteSpace=wrap;html=1;fontFamily=Microsoft YaHei;fontStyle=1;fillColor=#f5f5f5;strokeColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="20" y="20" width="1160" height="150" as="geometry" />
+        </mxCell>
+        <mxCell id="3" value="固件输入&#xa;入口寄存器 / U-Boot argv / DTB" style="rounded=1;whiteSpace=wrap;html=1;fontFamily=Microsoft YaHei;fontSize=13;fillColor=#f5f5f5;strokeColor=#666666;" vertex="1" parent="2">
+          <mxGeometry x="30" y="50" width="210" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="4" value="架构入口&#xa;RISC-V / LoongArch" style="rounded=1;whiteSpace=wrap;html=1;fontFamily=Microsoft YaHei;fontSize=13;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="2">
+          <mxGeometry x="310" y="50" width="210" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="5" value="标准启动输入 BootInfo&#xa;boot_cpu_hwid&#xa;device_tree_paddr" style="rounded=1;whiteSpace=wrap;html=1;fontFamily=Microsoft YaHei;fontSize=13;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="2">
+          <mxGeometry x="590" y="40" width="230" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="6" value="唯一公共启动&#xa;boot::initialize_kernel()" style="rounded=1;whiteSpace=wrap;html=1;fontFamily=Microsoft YaHei;fontSize=13;fontStyle=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="2">
+          <mxGeometry x="890" y="50" width="240" height="70" as="geometry" />
+        </mxCell>
+
+        <mxCell id="7" value="通用内核：只保留一份策略" style="swimlane;startSize=30;container=1;pointerEvents=0;rounded=1;whiteSpace=wrap;html=1;fontFamily=Microsoft YaHei;fontStyle=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="20" y="210" width="1160" height="130" as="geometry" />
+        </mxCell>
+        <mxCell id="8" value="Console / IRQ 分发 / 时间换算 / 分区与根盘策略 / 网络栈 / VFS / 调度&#xa;这些逻辑不知道自己运行在 QEMU、2K1000 还是 VisionFive2" style="rounded=1;whiteSpace=wrap;html=1;fontFamily=Microsoft YaHei;fontSize=13;fillColor=#ffffff;strokeColor=#82b366;" vertex="1" parent="7">
+          <mxGeometry x="160" y="50" width="840" height="60" as="geometry" />
+        </mxCell>
+
+        <mxCell id="9" value="窄能力接口：差异只在这里穿过" style="swimlane;startSize=30;container=1;pointerEvents=0;rounded=1;whiteSpace=wrap;html=1;fontFamily=Microsoft YaHei;fontStyle=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+          <mxGeometry x="20" y="380" width="1160" height="140" as="geometry" />
+        </mxCell>
+        <mxCell id="10" value="BootInfo · console · IRQ registry/controller · clock · RTC · memory · block · net/config · power · PCI（按需）&#xa;每个接口只描述一种能力，不存在巨型 PlatformManager" style="rounded=1;whiteSpace=wrap;html=1;fontFamily=Microsoft YaHei;fontSize=13;fontStyle=1;fillColor=#ffffff;strokeColor=#d6b656;" vertex="1" parent="9">
+          <mxGeometry x="130" y="50" width="900" height="70" as="geometry" />
+        </mxCell>
+
+        <mxCell id="11" value="构建画像：为每项能力明确选择活动实现路径" style="swimlane;startSize=30;container=1;pointerEvents=0;rounded=1;whiteSpace=wrap;html=1;fontFamily=Microsoft YaHei;fontStyle=1;fillColor=#ffe6cc;strokeColor=#d79b00;" vertex="1" parent="1">
+          <mxGeometry x="20" y="560" width="1160" height="200" as="geometry" />
+        </mxCell>
+        <mxCell id="12" value="mk/platform/{arch}-{board}.mk&#xa;选择架构/平台/驱动、链接脚本、输出目录&#xa;不做运行时插件发现" style="rounded=1;whiteSpace=wrap;html=1;fontFamily=Microsoft YaHei;fontSize=13;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="11">
+          <mxGeometry x="40" y="60" width="310" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="13" value="每个产物选择一套关键硬件组合：&#xa;RISC-V QEMU：PLIC + VirtIO MMIO&#xa;VisionFive2：SBI + PLIC + DWMMC/SD + GMAC1&#xa;LoongArch QEMU：PCH/ExtIOI + VirtIO PCI&#xa;LoongArch 2K1000：NS16550 + LIOINTC + AHCI + GMAC + TOY RTC" style="rounded=1;whiteSpace=wrap;html=1;fontFamily=Microsoft YaHei;fontSize=13;fontStyle=1;fillColor=#ffffff;strokeColor=#d79b00;" vertex="1" parent="11">
+          <mxGeometry x="470" y="40" width="640" height="140" as="geometry" />
+        </mxCell>
+
+        <mxCell id="14" value="硬件与设备协议：各管自己的寄存器、DMA 和总线事务" style="swimlane;startSize=30;container=1;pointerEvents=0;rounded=1;whiteSpace=wrap;html=1;fontFamily=Microsoft YaHei;fontStyle=1;fillColor=#f5f5f5;strokeColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="20" y="800" width="1160" height="130" as="geometry" />
+        </mxCell>
+        <mxCell id="15" value="SBI/NS16550 · PLIC/LIOINTC/ExtIOI · VirtIO MMIO/PCI · DWMMC/SD · AHCI · GMAC · RTC&#xa;驱动不决定根分区、IP 地址、调度策略或页表布局" style="rounded=1;whiteSpace=wrap;html=1;fontFamily=Microsoft YaHei;fontSize=13;fillColor=#ffffff;strokeColor=#666666;" vertex="1" parent="14">
+          <mxGeometry x="130" y="50" width="900" height="60" as="geometry" />
+        </mxCell>
+
+        <mxCell id="16" value="固件输入" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;fontFamily=Microsoft YaHei;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="3" target="4">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="17" value="消化寄存器约定" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;fontFamily=Microsoft YaHei;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="4" target="5">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="18" value="标准化交接" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;fontFamily=Microsoft YaHei;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="5" target="6">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="19" value="统一初始化" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;fontFamily=Microsoft YaHei;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="6" target="8">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="20" value="只依赖所需能力" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;fontFamily=Microsoft YaHei;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="8" target="10">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="21" value="链接期绑定" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;fontFamily=Microsoft YaHei;exitX=0.65;exitY=1;entryX=0.72;entryY=0;" edge="1" parent="1" source="10" target="13">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="22" value="明确选择" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;fontFamily=Microsoft YaHei;dashed=1;strokeColor=#9673a6;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="12" target="13">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="23" value="驱动硬件" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;fontFamily=Microsoft YaHei;exitX=0.7;exitY=1;entryX=0.7;entryY=0;" edge="1" parent="1" source="13" target="15">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

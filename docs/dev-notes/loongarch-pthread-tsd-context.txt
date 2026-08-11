@@ -7,7 +7,7 @@
 `entry-static.exe pthread_tsd`
 
 当前最小复现日志：
-`build/loongarch/logs/run-la-pthread-tsd-current-clean.log`
+`logs/run/run-la-pthread-tsd-current-clean.log`
 
 现象非常稳定：
 - `/llsc_exec_probe` 通过
@@ -74,13 +74,13 @@
 
 复现命令我留这两条就够：
 ```bash
-make build ARCH=loongarch
-timeout 20s make run l QEMU_MEM=1G </dev/null > build/loongarch/logs/run-la-pthread-tsd-current-clean.log 2>&1
+make build PROFILE=loongarch-qemu
+timeout 20s make run PROFILE=loongarch-qemu QEMU_MEM=1G </dev/null > logs/run/run-la-pthread-tsd-current-clean.log 2>&1
 ```
 
 看关键结论：
 ```bash
-rg -n "pthread_tsd|panic:|self_pa|trapframe_pa|self_all_leaf_alias|tl_all_leaf_alias|llbctl" build/loongarch/logs/run-la-pthread-tsd-current-clean.log
+rg -n "pthread_tsd|panic:|self_pa|trapframe_pa|self_all_leaf_alias|tl_all_leaf_alias|llbctl" logs/run/run-la-pthread-tsd-current-clean.log
 ```
 
-这轮我没有创建任何总结文件，整理都在这里了。构建我也重新验过了：`make build ARCH=loongarch` 通过
+这轮我没有创建任何总结文件，整理都在这里了。构建我也重新验过了：`make build PROFILE=loongarch-qemu` 通过

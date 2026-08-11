@@ -121,7 +121,7 @@ F7LY-OS 在开发过程中参考和移植了以下开源项目与第三方库：
 
 - *网络数据面与 Socket ABI 完善*——从零构建 TCP/UDP 协议栈，支持本机 loopback 及外部 IPv4 访问。打通“socket -> onps协议栈 -> VirtIO-Net”完整链路，使 socket 层具备真实 payload 传输能力。
 
-- *交互式 BusyBox ash*——新增 `make shell r/l` 入口，使用独立 ext4 rootfs 镜像进入 BusyBox ash 交互终端。打通了 UART→控制台行规程→device_file→fd 0→BusyBox 的完整输入链路，支持 `pwd`、`ls`、`cat`、脚本执行和正常 `exit`。
+- *交互式 BusyBox ash*——新增 `make shell PROFILE=<qemu画像>` 入口，使用独立 ext4 rootfs 镜像进入 BusyBox ash 交互终端。打通了 UART→控制台行规程→device_file→fd 0→BusyBox 的完整输入链路，支持 `pwd`、`ls`、`cat`、脚本执行和正常 `exit`。
 
 - *动态 ELF 与 shebang 执行链*——支持 `PT_INTERP` 动态链接器路径读取与 musl/glibc loader 重写，按 ELF `p_align` 对齐装载（含 LoongArch 的 16KB 对齐要求）。支持 `#!` shebang 解释器递归和参数重写，使脚本文件可直接执行。
 

@@ -32,52 +32,67 @@ F7LY OS 是一个面向教学、比赛和 Linux ABI 兼容性评测的双架构�
 
 镜像文件位于 `images/`：
 
-- `images/sdcard-rv-pub.img`
-- `images/sdcard-la-pub.img`
-- `images/rootfs-riscv64.img`、`images/rootfs-loongarch64.img`（交互式 shell）
+- `images/oscomp-preliminary-riscv64.img`、
+  `images/oscomp-preliminary-loongarch64.img`：初赛评测盘，供 `make run`
+  使用。
+- `images/oscomp-final-riscv64.img`、
+  `images/oscomp-final-loongarch64.img`：决赛完整 rootfs，供
+  `make shell` 使用。
+- `images/bak/`：上述四个镜像的本地基线备份。
 
-`make run r/l` 默认使用 2026 决赛公开镜像，以 8 vCPU、8 GiB 内存和 snapshot 模式运行；旧 `sdcard-rv.img`、`sdcard-la.img` 仅供既有初赛专项脚本使用。这些镜像通常很大，默认不应作为日常代码改动提交。
+`make run`、`make shell` 和 `make debug` 启动 QEMU 前才检查镜像：先使用
+`images/` 工作副本；工作副本缺失时从 `images/bak/` 复制；两者都缺失时
+下载官方 `.xz`，校验后解压到 `bak`，再复制工作副本。`make build` 和
+`make all` 只编译内核，不检查镜像、不访问网络。镜像体积很大，均由
+`.gitignore` 排除。
 
 ## 快速开始
+
+大赛完整构建入口（同时生成两种架构的 QEMU evaluation 内核）：
+
+```bash
+make all
+```
+
+`make` 的默认目标也是 `all`。完成后仓库根目录必须同时存在
+`kernel-rv(.bin)` 与 `kernel-la(.bin)`。
 
 构建 RISC-V：
 
 ```bash
-make build ARCH=riscv
+make build PROFILE=riscv-qemu
 ```
 
 构建 LoongArch：
 
 ```bash
-make build ARCH=loongarch
+make build PROFILE=loongarch-qemu
 ```
 
-也可以使用架构别名：
+查看全部可用画像：
 
 ```bash
-make r
-make l
+make profiles
 ```
 
 运行 RISC-V：
 
 ```bash
-make run r
+make run PROFILE=riscv-qemu
 ```
 
 运行 LoongArch：
 
 ```bash
-make run l
+make run PROFILE=loongarch-qemu
 ```
 
-构建输出默认进入 `build/<arch>/`：
+最终内核产物位于仓库根目录，中间对象位于各画像的独立 `build/` 子目录：
 
-- RISC-V 内核 ELF：`build/riscv/kernel-qemu`
-- RISC-V raw binary：`build/riscv/kernel-qemu.bin`
-- LoongArch 内核 ELF：`build/loongarch/kernel-la`
-- LoongArch raw binary：`build/loongarch/kernel-la.bin`
-- 用户态 initcode：`user/initcode-rv` 或 `user/initcode-la`
+- RISC-V 内核 ELF/raw binary：`kernel-rv`、`kernel-rv.bin`
+- LoongArch 内核 ELF/raw binary：`kernel-la`、`kernel-la.bin`
+- 内嵌 initcode：`build/riscv-qemu/user/initcode.bin` 或
+  `build/loongarch-qemu/user/initcode.bin`
 
 清理构建产物：
 
@@ -90,7 +105,7 @@ make clean
 启动 RISC-V 调试目标：
 
 ```bash
-make debug ARCH=riscv
+make debug PROFILE=riscv-qemu
 ```
 
 另开终端连接 GDB：
@@ -102,7 +117,7 @@ gdb-multiarch -x debug/gdb/riscv.gdb
 启动 LoongArch 调试目标：
 
 ```bash
-make debug ARCH=loongarch
+make debug PROFILE=loongarch-qemu
 ```
 
 另开终端连接 GDB：
@@ -122,23 +137,24 @@ log="logs/run/output_r_${ts}_final-2026_QEMU_MEM-8G_QEMU_SMP-8_timeout-40m.txt"
 {
   echo "run_at=${ts}"
   echo "arch=riscv"
-  echo "cmd=timeout 40m make run r QEMU_MEM=8G QEMU_SMP=8"
+  echo "cmd=timeout 40m make run PROFILE=riscv-qemu QEMU_MEM=8G QEMU_SMP=8"
   echo "git_branch=$(git branch --show-current 2>/dev/null || true)"
   echo "git_head=$(git rev-parse --short HEAD 2>/dev/null || true)"
   echo "---- output ----"
-  timeout 40m make run r QEMU_MEM=8G QEMU_SMP=8
+  timeout 40m make run PROFILE=riscv-qemu QEMU_MEM=8G QEMU_SMP=8
   echo "exit_code=$?"
 } > "$log" 2>&1
 echo "$log"
 ```
 
-LoongArch 只需把日志名前缀和命令改成 `make run l`。单测调试建议把 timeout 控制在 5 分钟以内。
+LoongArch 只需把日志名前缀和画像改成 `PROFILE=loongarch-qemu`。单测调试建议把 timeout 控制在 5 分钟以内。
 
 ## 目录结构
 
 | 路径 | 说明 |
 | --- | --- |
 | `kernel/` | 内核主体代码 |
+| `mk/` | 构建配置、initcode、内核、QEMU 规则和平台画像 |
 | `user/` | 用户态 initcode、syscall 封装和回归测试入口 |
 | `busybox/` | 按架构和 libc 分类的 BusyBox 二进制 |
 | `thirdparty/EASTL/` | 内核使用的 EASTL 容器库 |
@@ -209,9 +225,27 @@ which python
 
 更多协作规则见 `AGENTS.md`。
 
-## rootfs下载地址
-https://github.com/Starry-OS/rootfs/releases/download/20260214/rootfs-riscv64.img.xz
+## 磁盘镜像准备
+
+通常无需手动下载，首次 `make run` 或 `make shell` 会自动准备对应架构的
+镜像。也可以只准备镜像而不启动 QEMU：
+
+```bash
+make prepare-image PROFILE=riscv-qemu MODE=evaluation
+make prepare-image PROFILE=loongarch-qemu MODE=evaluation
+make prepare-image PROFILE=riscv-qemu MODE=shell
+make prepare-image PROFILE=loongarch-qemu MODE=shell
+```
+
+初赛盘来自 `pre-20250615` release，决赛完整 rootfs 来自
+`on-site-final-2025-rv64-fs` 和 `on-site-final-2025-la64-fs` release。
+具体 URL 集中维护在 `scripts/images/prepare-qemu-image.sh`，Makefile 不再
+重复保存下载地址。
 
 ## 镜像源替换
-在使用make shell的交互式rootfs
+
+在使用 `make shell` 的交互式 rootfs 中：
+
+```bash
 sed -i 's|https://mirrors.cernet.edu.cn/alpine|https://dl-cdn.alpinelinux.org/alpine|g' /etc/apk/repositories
+```
