@@ -2,7 +2,7 @@
 #include "types.hh"
 #include "devs/spinlock.hh"
 #include "buddysystem.hh"
-#include "platform.hh"
+#include "hal/arch.hh"
 namespace mem
 {
 

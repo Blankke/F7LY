@@ -5,6 +5,7 @@
 #include "proc/process_memory_manager.hh"
 #include "param.h"
 #include "printer.hh"
+#include "tm/time.hh"
 #include <EASTL/atomic.h>
 
 namespace hal::tlb
@@ -19,10 +20,11 @@ namespace
     constexpr uint32 k_ipi_tlb_mask = 1U << k_ipi_tlb_vector;
     constexpr uint32 k_ipi_target_cpu_shift = 16;
     constexpr uint32 k_iocsr_send_blocking = 1U << 31;
-    // LoongArch QEMU virt 的稳定计时器为 100 MHz。重发是协议的一部分：
-    // IOCSR IPI 状态是可合并位，不能把一次边沿当作可靠消息队列。
-    constexpr uint64 k_ipi_retry_cycles = 100000ULL;
-    constexpr uint64 k_shootdown_timeout_cycles = 1000000000ULL;
+    // 重发是协议的一部分：IOCSR IPI 状态是可合并位，不能把一次边沿当作
+    // 可靠消息队列。策略使用明确时间单位，硬件周期由当前画像的 clock
+    // backend 换算，不能把 QEMU 100MHz 的裸周期复制到 2K1000。
+    constexpr uint64 k_ipi_retry_microseconds = 1'000ULL;
+    constexpr uint64 k_shootdown_timeout_microseconds = 10'000'000ULL;
 
     eastl::atomic<uint64> g_generation{0};
     eastl::atomic<uint64> g_requested_generation[NCPU]{};
@@ -217,6 +219,10 @@ void flush_range_all_cpus(uint64 start, uint64 size)
     const uint64 current_cpu = Cpu::current_cpu_id();
     const uint64 online_mask = Cpu::online_cpu_mask();
     const uint64 generation = g_generation.fetch_add(1, eastl::memory_order_acq_rel) + 1;
+    const uint64 ipi_retry_cycles =
+        tmm::microseconds_to_cycles(k_ipi_retry_microseconds);
+    const uint64 shootdown_timeout_cycles =
+        tmm::microseconds_to_cycles(k_shootdown_timeout_microseconds);
     uint64 remote_mask = online_mask;
     if (Cpu::is_valid_cpu_id(current_cpu))
     {
@@ -247,7 +253,7 @@ void flush_range_all_cpus(uint64 start, uint64 size)
             continue;
         }
         const uint64 wait_start = Cpu::get_cpu()->get_time();
-        uint64 next_retry = wait_start + k_ipi_retry_cycles;
+        uint64 next_retry = wait_start + ipi_retry_cycles;
         uint32 probe_spins = 0;
         while (g_acknowledged_generation[cpu_id].load(eastl::memory_order_acquire) < generation)
         {
@@ -268,9 +274,9 @@ void flush_range_all_cpus(uint64 start, uint64 size)
                 // request generation 单调递增，因此重复置同一 IPI 位完全幂等；
                 // 周期性重发可从状态位合并或 vCPU 暂停窗口中可靠恢复。
                 send_tlb_ipi(cpu_id);
-                next_retry = now + k_ipi_retry_cycles;
+                next_retry = now + ipi_retry_cycles;
             }
-            if (now - wait_start >= k_shootdown_timeout_cycles)
+            if (now - wait_start >= shootdown_timeout_cycles)
             {
                 panic("[tlb] LoongArch shootdown timeout sender=%lu target=%lu generation=%lu ack=%lu",
                       current_cpu, cpu_id, generation,
@@ -334,6 +340,12 @@ void flush_mm_range(proc::ProcessMemoryManager &mm, uint64 start, uint64 size)
 
     const uint64 current_cpu = Cpu::current_cpu_id();
     const uint64 generation = g_generation.fetch_add(1, eastl::memory_order_acq_rel) + 1;
+    // 与全核 shootdown 使用同一套时间策略。这里不能继续引用旧的 QEMU
+    // 裸周期常量，否则 2K1000 的真实频率下重试与超时长度会完全不同。
+    const uint64 ipi_retry_cycles =
+        tmm::microseconds_to_cycles(k_ipi_retry_microseconds);
+    const uint64 shootdown_timeout_cycles =
+        tmm::microseconds_to_cycles(k_shootdown_timeout_microseconds);
     uint64 remote_mask = 0;
     mm.tlb_state_lock.acquire();
     ++mm.tlb_generation;
@@ -375,7 +387,7 @@ void flush_mm_range(proc::ProcessMemoryManager &mm, uint64 start, uint64 size)
             continue;
         }
         const uint64 wait_start = Cpu::get_cpu()->get_time();
-        uint64 next_retry = wait_start + k_ipi_retry_cycles;
+        uint64 next_retry = wait_start + ipi_retry_cycles;
         uint32 probe_spins = 0;
         while (g_acknowledged_generation[cpu_id].load(eastl::memory_order_acquire) < generation)
         {
@@ -388,9 +400,9 @@ void flush_mm_range(proc::ProcessMemoryManager &mm, uint64 start, uint64 size)
             if (static_cast<int64>(now - next_retry) >= 0)
             {
                 send_tlb_ipi(cpu_id);
-                next_retry = now + k_ipi_retry_cycles;
+                next_retry = now + ipi_retry_cycles;
             }
-            if (now - wait_start >= k_shootdown_timeout_cycles)
+            if (now - wait_start >= shootdown_timeout_cycles)
             {
                 panic("[tlb] LoongArch mm shootdown timeout sender=%lu target=%lu generation=%lu ack=%lu",
                       current_cpu, cpu_id, generation,

@@ -4,6 +4,7 @@
 #include "physical_memory_manager.hh"
 #include "hal/tlb_shootdown.hh"
 #include "virtual_memory_manager.hh"
+#include "memlayout.hh"
 #include "devs/spinlock.hh"
 #include "sys/syscall_defs.hh"
 #include "klib.hh"

@@ -1,14 +1,16 @@
 #include "physical_memory_manager.hh"
 #include "types.hh"
-#include "platform.hh"
+#include "hal/arch.hh"
+#include "memlayout.hh"
 #include "devs/spinlock.hh"
 #include "buddysystem.hh"
 #include "printer.hh"
 #include "klib.hh"
 #include "slab.hh"
-#include "platform.hh"
 #include "devs/dtb.hh"
+#include "platform/memory.hh"
 extern "C" char end[]; // 来自链接脚本
+extern "C" char kernel_start[];
 #ifdef RISCV
 extern uint64 k_dtb_addr;
 #endif
@@ -81,7 +83,7 @@ namespace mem
 
             // 除 DTB 与 initrd 外，实机固件还会通过 reservation map 和
             // /reserved-memory 声明显存、CMA、共享 DMA 等不可分配区域。
-            constexpr int k_max_reserved_ranges = DtbManager::k_max_reserved_regions + 2;
+            constexpr int k_max_reserved_ranges = DtbManager::k_max_reserved_regions + 3;
             ReservedRange sorted[k_max_reserved_ranges]{};
             int count = reserved_count > k_max_reserved_ranges
                             ? k_max_reserved_ranges
@@ -321,17 +323,30 @@ namespace mem
             k_initrd_end = initrd_end;
         }
 
-        constexpr int k_max_reserved_ranges = DtbManager::k_max_reserved_regions + 2;
+        // 固件保留区之外，还要容纳内核镜像、DTB 和 initrd 三个启动期区间。
+        constexpr int k_max_reserved_ranges = DtbManager::k_max_reserved_regions + 3;
         ReservedRange reserved_ranges[k_max_reserved_ranges]{};
         int reserved_count = 0;
+
+        const uint64 kernel_image_start = PGROUNDDOWN(
+            platform::memory::physical_address(reinterpret_cast<uint64>(kernel_start)));
+        const uint64 kernel_image_end = PGROUNDUP(
+            platform::memory::physical_address(reinterpret_cast<uint64>(end)));
+        if (kernel_image_end <= kernel_image_start)
+        {
+            panic("[pmm] invalid kernel image range: start=0x%lx end=0x%lx",
+                  kernel_image_start, kernel_image_end);
+        }
+        // 把内核本身作为显式保留区，而不是只依靠“从 end 后开始分配”的
+        // 隐含规则。这样重复、重叠或乱序的 DTB RAM 节点也无法重新释放内核页。
+        reserved_ranges[reserved_count++] = {kernel_image_start, kernel_image_end};
+
         uint64 dtb_size = DtbManager::get_dtb_size();
         if (k_dtb_addr != 0)
         {
-            // DTB header 异常时保守沿用旧实现的 2 MiB 保护窗；正常路径只
-            // 排除 totalsize 覆盖的页面，不再把 DTB 后面的全部 RAM 丢掉。
             if (dtb_size == 0)
             {
-                dtb_size = _1M * 2;
+                panic("[pmm] validated DTB has no usable totalsize");
             }
             uint64 dtb_end = 0;
             if (!checked_region_top(k_dtb_addr, dtb_size, dtb_end))
@@ -370,9 +385,9 @@ namespace mem
 
         DtbMemoryRegion regions[DtbManager::k_max_memory_regions]{};
         int region_count = DtbManager::get_memory_regions(regions, DtbManager::k_max_memory_regions);
-#ifdef BOARD_LS2K1000
         // 这些是 PMM 的硬件输入。逐项输出后，可以直接和 DTB 的 memory、
-        // memreserve、reserved-memory、chosen/initrd 节点进行对照。
+        // memreserve、reserved-memory、chosen/initrd 节点进行对照。boardPrintf
+        // 会根据当前平台画像决定是否输出，因此内存管理器不需要认识具体板名。
         boardPrintfInfo("[pmm] input: ram-regions=%d firmware-reserved=%d/%d "
                         "combined-reserved=%d\n",
                         region_count, accepted_firmware_reserved_count,
@@ -390,10 +405,8 @@ namespace mem
                         index, reserved_ranges[index].start,
                         reserved_ranges[index].end);
         }
-#else
         printfGreen("[pmm] honored %d firmware reserved-memory ranges\n",
                     accepted_firmware_reserved_count);
-#endif
         uint64 allocator_start = 0;
         uint64 allocator_top = 0;
 
@@ -432,19 +445,14 @@ namespace mem
             }
         }
 
-        if (kernel_region_index < 0 || best_interval.bytes() == 0)
+        if (kernel_region_index < 0)
         {
-            // 没有可解析 DTB 时保留原有启动边界，避免把未知地址当作 RAM。
-            best_interval = largest_usable_interval(
-                kernel_end_phys, PHYSTOP, reserved_ranges, reserved_count);
-            if (best_interval.bytes() == 0)
-            {
-                panic("[pmm] fallback RAM has no usable interval");
-            }
-            kernel_region_top = PGROUNDDOWN(PHYSTOP);
-            selected_region_top = kernel_region_top;
-            printfYellow("[pmm] incomplete DTB RAM description, fallback top=%p\n",
-                         kernel_region_top);
+            panic("[pmm] DTB memory nodes do not contain the RISC-V kernel end=%p",
+                  kernel_end_phys);
+        }
+        if (best_interval.bytes() == 0)
+        {
+            panic("[pmm] DTB has no usable RISC-V allocator interval");
         }
         allocator_start = best_interval.start;
         allocator_top = best_interval.top;
@@ -481,7 +489,12 @@ namespace mem
             {
                 continue;
             }
-            const uint64 region_start = i == kernel_region_index
+            // DTB 理论上不应重复或重叠描述 RAM，但实机固件并不总是规范。
+            // 每一个覆盖内核末尾的节点都必须裁掉内核占用区，不能只裁最后
+            // 一个匹配节点，否则重复节点会把正在运行的内核页再次交给 buddy。
+            const bool contains_kernel =
+                kernel_end_phys > regions[i].base && kernel_end_phys <= region_top;
+            const uint64 region_start = contains_kernel
                                             ? kernel_end_phys
                                             : regions[i].base;
             UsableInterval candidate = largest_usable_interval(
@@ -492,35 +505,20 @@ namespace mem
             }
         }
 
+        if (kernel_region_index < 0)
+        {
+            panic("[pmm] DTB memory nodes do not contain the LoongArch kernel end=0x%lx",
+                  kernel_end_phys);
+        }
         if (best_interval.bytes() == 0)
         {
-            best_interval = largest_usable_interval(
-                kernel_end_phys, VIRT2PHY(PHYSTOP),
-                reserved_ranges, reserved_count);
-            if (best_interval.bytes() == 0)
-            {
-                panic("[pmm] LoongArch fallback RAM has no usable interval");
-            }
-            allocator_start = to_vir(best_interval.start);
-            allocator_top = to_vir(best_interval.top);
-            kernel_linear_top = PGROUNDDOWN(PHYSTOP);
-            boardPrintfWarn("[pmm] no usable DTB memory region; fallback-physical="
-                            "0x%lx-0x%lx\n",
-                            VIRT2PHY(allocator_start), VIRT2PHY(allocator_top));
-            printfYellow("[pmm] no usable DTB memory region, fallback=%p-%p\n",
-                         allocator_start, allocator_top);
+            panic("[pmm] DTB has no usable LoongArch allocator interval");
         }
-        else
-        {
-            // DMWIN 对所有 RAM 提供直映；因此页分配器应使用最大连续 RAM 区，
-            // 而不是永远困在包含内核的 128/256 MiB 低端区。
-            allocator_start = to_vir(best_interval.start);
-            allocator_top = to_vir(best_interval.top);
-        }
-        if (kernel_linear_top == 0)
-        {
-            kernel_linear_top = PGROUNDDOWN(PHYSTOP);
-        }
+
+        // DMWIN 对所有 RAM 提供直映；因此页分配器使用 DTB 中最大的连续
+        // 可用区，而不是永远困在包含内核的低端区。
+        allocator_start = to_vir(best_interval.start);
+        allocator_top = to_vir(best_interval.top);
 #endif
 
         allocator_start = PGROUNDUP(allocator_start);
@@ -531,11 +529,10 @@ namespace mem
                   allocator_start, allocator_top);
         }
         phys_top = allocator_top;
-#ifdef BOARD_LS2K1000
         boardPrintfInfo("[pmm] output: selected-ram=0x%lx-0x%lx size=%lu KiB\n",
-                        VIRT2PHY(allocator_start), VIRT2PHY(allocator_top),
+                        platform::memory::physical_address(allocator_start),
+                        platform::memory::physical_address(allocator_top),
                         (allocator_top - allocator_start) / 1024);
-#endif
 
         const uint32 max_heap_pages = static_cast<uint32>(vm_kernel_heap_size / PGSIZE);
         const uint64 max_heap_metadata = PGROUNDUP(BuddySystem::required_storage_bytes(max_heap_pages));
@@ -580,18 +577,19 @@ namespace mem
         _buddy->Initialize(pa_start, page_count,
                            reinterpret_cast<void *>(pmm_layout.tree_start),
                            pmm_layout.tree_bytes);
-#ifdef BOARD_LS2K1000
         // 输出的是物理地址而非 DMW 别名，便于与手册、U-Boot bdinfo 和 DTB
         // 使用同一坐标系核对。区间均为左闭右开 [start,end)。
         boardPrintfInfo("[pmm] output: buddy=0x%lx-0x%lx pages=%u "
                         "heap=0x%lx-0x%lx shm=0x%lx-0x%lx\n",
-                        VIRT2PHY(pa_start),
-                        VIRT2PHY(pa_start + static_cast<uint64>(page_count) * PGSIZE),
+                        platform::memory::physical_address(pa_start),
+                        platform::memory::physical_address(
+                            pa_start + static_cast<uint64>(page_count) * PGSIZE),
                         page_count,
-                        VIRT2PHY(heap_area_start),
-                        VIRT2PHY(heap_area_start + heap_allocator_size),
-                        VIRT2PHY(shm_start), VIRT2PHY(shm_start + shm_size));
-#endif
+                        platform::memory::physical_address(heap_area_start),
+                        platform::memory::physical_address(
+                            heap_area_start + heap_allocator_size),
+                        platform::memory::physical_address(shm_start),
+                        platform::memory::physical_address(shm_start + shm_size));
     }
 
     void *PhysicalMemoryManager::alloc_page()

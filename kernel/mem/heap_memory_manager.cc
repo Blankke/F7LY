@@ -16,6 +16,10 @@ namespace mem
 
 	void HeapMemoryManager::init( const char *lock_name ,uint64_t heap_start, uint64_t heap_size)
 	{
+		if (_initialized)
+		{
+			panic("[hmm] initialized twice");
+		}
 		_lock.init( lock_name );
 
         uint64 heap_pages = heap_size / PGSIZE;
@@ -44,12 +48,17 @@ namespace mem
 			"kernel heap allocator - liballoc",
 			_k_allocator_coarse
 		);
+		_initialized = true;
 		//这里细粒度的管理是依仗着粗粒度进行的，它每一次申请内存的时候都会调用粗粒度的buddy系统，分配一个页面
 		//再从这样分配的页面中，进行更细粒度的内存分配。
 	}
 
 		void * HeapMemoryManager::allocate( uint64 size )
 		{
+		if (!_initialized)
+		{
+			panic("[hmm] allocation requested before heap initialization");
+		}
 		// 全局 new/delete 需要服务普通 C++ 对象和 EASTL 容器，
 		// 这里必须使用细粒度分配器，不能再把每个对象都当成整页来分配/释放。
 		// 否则一旦释放路径遇到非页对齐对象，就会在 kfree! 处直接崩掉。
@@ -81,6 +90,10 @@ namespace mem
 
 	void *HeapMemoryManager::try_allocate(uint64 size)
 	{
+		if (!_initialized)
+		{
+			return nullptr;
+		}
 		if (size == 0)
 		{
 			size = 1;

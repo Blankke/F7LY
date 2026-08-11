@@ -298,6 +298,17 @@ namespace virtio_blk
             uint64 next_gate_us = 0;
             dispatch_pending_locked(&next_gate_us);
 
+            // 根盘会在 scheduler 启动前被读取。这个阶段没有当前进程，不能调用
+            // sleep()/yield()；短暂释放锁后轮询，既让设备中断有机会处理完成队列，
+            // 也允许本循环直接观察 used ring。进入用户态后仍使用正常的睡眠等待。
+            if (proc::k_pm.get_cur_pcb() == nullptr)
+            {
+                lock_.release();
+                asm volatile("nop");
+                lock_.acquire();
+                continue;
+            }
+
             if (transport_->polling_wait())
             {
                 lock_.release();

@@ -11,6 +11,10 @@ namespace dev
     ConsoleTermiosController::ConsoleTermiosController()
         : _termios(make_default_termios())
     {
+    }
+
+    void ConsoleTermiosController::initialize_line_discipline()
+    {
         sync_to_line_discipline(_termios);
     }
 

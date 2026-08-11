@@ -1,7 +1,7 @@
 .globl initcode_start, initcode_end
 
 #ifndef INITCODE_BIN_PATH
-#define INITCODE_BIN_PATH "../../user/initcode-rv"
+#error "INITCODE_BIN_PATH 必须由当前平台画像的构建规则提供"
 #endif
 
 initcode_start:

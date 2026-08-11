@@ -3,8 +3,12 @@
 
 namespace dev {
 
-RamDisk::RamDisk(uint64 start_addr, uint64 size) 
+RamDisk::RamDisk(uint64 start_addr, uint64 size)
     : _start_addr(start_addr), _size(size) {
+}
+
+uint64 RamDisk::capacity_bytes() const {
+    return _size;
 }
 
 long RamDisk::get_block_size() {
@@ -13,9 +17,9 @@ long RamDisk::get_block_size() {
 
 int RamDisk::read_blocks_sync(long start_block, long block_count, BufferDescriptor *buf_list, int buf_count) {
     uint64 offset = (uint64)start_block * 512;
-    
+
     char* src = (char*)(_start_addr + offset);
-    
+
     for (int i = 0; i < buf_count; ++i) {
         if (offset + buf_list[i].buf_size > _size) {
             return -1; // Out of bounds
@@ -34,7 +38,7 @@ int RamDisk::read_blocks(long start_block, long block_count, BufferDescriptor *b
 int RamDisk::write_blocks_sync(long start_block, long block_count, BufferDescriptor *buf_list, int buf_count) {
     uint64 offset = (uint64)start_block * 512;
     char* dst = (char*)(_start_addr + offset);
-    
+
     for (int i = 0; i < buf_count; ++i) {
         if (offset + buf_list[i].buf_size > _size) {
             return -1; // Out of bounds

@@ -2,11 +2,12 @@
 
 #include "devs/dtb.hh"
 #include "hal/cpu.hh"
+#include "hal/irq.hh"
 #include "hal/smp.hh"
 #include "hal/tlb_shootdown.hh"
 #include "mem/memlayout.hh"
 #include "mem/virtual_memory_manager.hh"
-#include "platform.hh"
+#include "hal/arch.hh"
 #include "printer.hh"
 #include "proc/scheduler.hh"
 #include "tm/time.hh"
@@ -96,6 +97,7 @@ namespace
         // 状态完整建立后才发布 online，主核随后才能安全放行调度器。
         mem::k_vmm.activate_kernel_pagetable();
         Cpu::initialize_current();
+        hal::irq::initialize_current_cpu();
         trap_mgr.inithart();
         hal::tlb::initialize_current_cpu();
         Cpu::mark_current_online();
@@ -191,7 +193,7 @@ void start_secondaries(uint64 boot_argument)
     // 固件没有停驻某个 DTB CPU、mailbox 契约不匹配或次核硬件故障时，不能
     // 永久阻塞主核。两秒后收缩到已上线 CPU，系统仍可安全以单核方式启动。
     const uint64 wait_start = rdtime();
-    const uint64 wait_cycles = tmm::get_main_frequence() * 2ULL;
+    const uint64 wait_cycles = tmm::clock_frequency_hz() * 2ULL;
     while (Cpu::online_cpu_mask() != Cpu::possible_cpu_mask())
     {
         if (rdtime() - wait_start >= wait_cycles)

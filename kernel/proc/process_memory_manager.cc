@@ -19,8 +19,9 @@
 #include "klib.hh"
 #include "printer.hh"
 #include "vm_object.hh"
-#include "platform.hh" // 为MAX/MIN宏
+#include "hal/arch.hh"
 #include "memlayout.hh"
+#include "mem/kernel_image.hh"
 #include "fs/vfs/file/normal_file.hh"
 #include "fs/vfs/vfs_utils.hh"
 #include "fs/vfs/virtual_fs.hh"
@@ -40,11 +41,6 @@ namespace proc
         constexpr uint64 k_mmap_min_base = 0x10000000ULL;
         constexpr uint64 k_mmap_guard_gap = 16 * PGSIZE;
         constexpr uint64 k_mmap_upper_guard = 256 * PGSIZE;
-#ifdef RISCV
-        constexpr uint64 k_min_kernel_object_ptr = KERNBASE;
-#elif defined(LOONGARCH)
-        constexpr uint64 k_min_kernel_object_ptr = PHYSBASE;
-#endif
         inline uint32 max_reasonable_file_refcnt()
         {
             return num_process * max_open_files;
@@ -440,12 +436,12 @@ namespace proc
 
         inline bool is_probably_kernel_object_ptr(const void *ptr)
         {
-            return (uint64)ptr >= k_min_kernel_object_ptr;
+            return (uint64)ptr >= mem::kernel_image_start_address();
         }
 
         inline bool is_kernel_mapped_range(uint64 addr, uint64 size)
         {
-            if (addr < k_min_kernel_object_ptr || size == 0)
+            if (addr < mem::kernel_image_start_address() || size == 0)
             {
                 return false;
             }

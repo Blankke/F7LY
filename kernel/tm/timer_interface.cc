@@ -21,18 +21,6 @@
 namespace tmm
 {
 	/**
-	 * @brief 处理系统tick中断（已废弃）
-	 * 
-	 * 注意：此函数已被注释掉，tick中断处理现在由trap_manager直接管理。
-	 * 原来的设计是通过这个接口处理时钟中断，但现在中断处理逻辑
-	 * 已经重构到了更底层的trap处理模块中。
-	 */
-	// int handle_tick_intr()
-	// {
-	// 	return tmm::k_tm.handle_clock_intr();
-	// }
-
-	/**
 	 * @brief 获取当前系统tick计数
 	 * @return 自系统启动以来的tick数
 	 * 
@@ -53,13 +41,5 @@ namespace tmm
 	{
 		return tmm::k_tm.get_tick_wait_channel();
 	}
-
-	/**
-	 * @brief 模块说明
-	 * 
-	 * 本模块作为定时器功能的接口层，目前只实现了部分函数。
-	 * 其他在timer_interface.hh中声明的函数（如get_main_frequence、
-	 * cycles_per_tick等）的实现位于time.hh中的内联函数。
-	 */
 
 } // namespace tmm

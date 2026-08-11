@@ -18,7 +18,7 @@
 #include "param.h"
 #include "spinlock.hh"
 #include "sleeplock.hh"
-#include "platform.hh"
+#include "hal/arch.hh"
 
 #include "fs/vfs/fs.hh"
 #include "fs/buf.hh"
@@ -99,19 +99,25 @@ bread(uint dev, uint blockno)
 
   b = bget(dev, blockno);
   if(!b->valid) {
-    dev::VirtualDevice* vdev = dev::k_devm.get_device(dev);
-    if (vdev && vdev->type() == dev::DeviceType::dev_block) {
-       dev::BlockDevice* bd = (dev::BlockDevice*)vdev;
-       dev::BufferDescriptor bsecs[1];
-       bsecs[0].buf_addr = (uint64)b->data;
-       bsecs[0].buf_size = BSIZE;
-       if (bd->read_blocks(blockno, 1, bsecs, 1) != 0) {
-           // 已经定位到具体设备后，I/O 失败不能再落到平台根盘，否则会把
-           // “设备故障”错误地转换成“从另一块盘读取同一块号”。
-           panic("bread: block device read failed dev=%u block=%u", dev, blockno);
-       }
-    } else {
+    // ROOTDEV 是平台块层发布的逻辑根分区；其它设备号必须在设备表中明确
+    // 注册为块设备。不能用“查找失败就回退根盘”，否则错误设备号会静默
+    // 读到另一块盘的同一 blockno。
+    if (dev == ROOTDEV) {
       platform_block_rw(b, 0);
+    } else {
+      dev::VirtualDevice *vdev = dev::k_devm.get_device(dev);
+      if (vdev == nullptr || vdev->type() != dev::DeviceType::dev_block) {
+        panic("bread: unknown block device dev=%u", dev);
+      }
+      dev::BlockDevice *bd = static_cast<dev::BlockDevice *>(vdev);
+      dev::BufferDescriptor bsecs[1];
+      bsecs[0].buf_addr = (uint64)b->data;
+      bsecs[0].buf_size = BSIZE;
+      if (bd->read_blocks(blockno, 1, bsecs, 1) != 0) {
+        // 已经定位到具体设备后，I/O 失败不能再落到平台根盘，否则会把
+        // “设备故障”错误地转换成“从另一块盘读取同一块号”。
+        panic("bread: block device read failed dev=%u block=%u", dev, blockno);
+      }
     }
 
     b->valid = 1;
@@ -126,18 +132,21 @@ bwrite(struct buf *b)
   if(!(b->lock.is_holding()))
     panic("bwrite");
 
-  dev::VirtualDevice* vdev = dev::k_devm.get_device(b->dev);
-  if (vdev && vdev->type() == dev::DeviceType::dev_block) {
-       dev::BlockDevice* bd = (dev::BlockDevice*)vdev;
-       dev::BufferDescriptor bsecs[1];
-       bsecs[0].buf_addr = (uint64)b->data;
-       bsecs[0].buf_size = BSIZE;
-       if (bd->write_blocks(b->blockno, 1, bsecs, 1) != 0) {
-           panic("bwrite: block device write failed dev=%u block=%u",
-                 b->dev, b->blockno);
-       }
-  } else {
+  if (b->dev == ROOTDEV) {
     platform_block_rw(b, 1);
+  } else {
+    dev::VirtualDevice *vdev = dev::k_devm.get_device(b->dev);
+    if (vdev == nullptr || vdev->type() != dev::DeviceType::dev_block) {
+      panic("bwrite: unknown block device dev=%u", b->dev);
+    }
+    dev::BlockDevice *bd = static_cast<dev::BlockDevice *>(vdev);
+    dev::BufferDescriptor bsecs[1];
+    bsecs[0].buf_addr = (uint64)b->data;
+    bsecs[0].buf_size = BSIZE;
+    if (bd->write_blocks(b->blockno, 1, bsecs, 1) != 0) {
+      panic("bwrite: block device write failed dev=%u block=%u",
+            b->dev, b->blockno);
+    }
   }
 }
 

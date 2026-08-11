@@ -13,10 +13,12 @@ namespace mem
 		BuddySystem* _k_allocator_coarse;
 
 		L_Allocator _k_allocator_fine;
+		bool _initialized;
 
 	public:
-		HeapMemoryManager() {};
+		HeapMemoryManager() : _k_allocator_coarse(nullptr), _initialized(false) {};
 			void init( const char *lock_name ,uint64_t heap_start, uint64_t heap_size);
+			bool is_initialized() const { return _initialized; }
 
 			void *allocate( uint64 size );
 			// 性能缓存类调用方需要“失败后走慢路径”，不能把缓存分配失败升级成 panic。

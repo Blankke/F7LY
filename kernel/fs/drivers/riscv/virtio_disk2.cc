@@ -4,17 +4,16 @@
 //
 
 #include "types.hh"
-#include "platform.hh"
+#include "hal/arch.hh"
 
 #include "param.h"
-#include "mem/memlayout.hh"
 #include "fs/drivers/virtio_blk.hh"
 #include "fs/drivers/virtio_blk_device.hh"
 #include "fs/drivers/virtio_blk_transport.hh"
 #include "global_operator.hh"
+#include "hal/irq.hh"
+#include "hal/riscv/platform_board.hh"
 #include "virtual_memory_manager.hh"
-
-#ifdef RISCV
 
 namespace
 {
@@ -107,6 +106,21 @@ namespace
     virtio_blk::VirtioBlkDevice *g_primary_device = nullptr;
     virtio_blk::VirtioBlkDevice *g_secondary_device = nullptr;
 
+    void virtio_block_irq_handler(void *context)
+    {
+        static_cast<virtio_blk::VirtioBlkDevice *>(context)->handle_interrupt();
+    }
+
+    void register_block_irq(uint32 source, virtio_blk::VirtioBlkDevice &device,
+                            const char *name)
+    {
+        if (!hal::irq::register_handler(
+                source, virtio_block_irq_handler, &device, name))
+        {
+            panic("failed to register virtio block IRQ source %u", source);
+        }
+    }
+
     MmioVirtioBlkTransport &ensure_mmio_transport(MmioVirtioBlkTransport *&transport_ptr,
                                                   unsigned char *storage,
                                                   uintptr_t base)
@@ -189,15 +203,25 @@ namespace
 void virtio_disk_init(void)
 {
     virtio_blk::VirtioBlkDevice &device = ensure_device(g_primary_device, g_primary_device_storage);
-    MmioVirtioBlkTransport &transport = ensure_mmio_transport(g_primary_transport, g_primary_transport_storage, VIRTIO0);
-    init_mmio_disk(VIRTIO0, device, transport, "virtio_disk_lock", 1, "could not find virtio disk");
+    MmioVirtioBlkTransport &transport = ensure_mmio_transport(
+        g_primary_transport, g_primary_transport_storage,
+        riscv::board::k_primary_block_mmio);
+    init_mmio_disk(riscv::board::k_primary_block_mmio, device, transport,
+                   "virtio_disk_lock", 1, "could not find virtio disk");
+    register_block_irq(riscv::board::k_primary_block_interrupt,
+                       device, "virtio-blk0");
 }
 
 void virtio_disk_init2(void)
 {
     virtio_blk::VirtioBlkDevice &device = ensure_device(g_secondary_device, g_secondary_device_storage);
-    MmioVirtioBlkTransport &transport = ensure_mmio_transport(g_secondary_transport, g_secondary_transport_storage, VIRTIO1);
-    init_mmio_disk(VIRTIO1, device, transport, "virtio_disk2_lock", 2, "could not find virtio disk2");
+    MmioVirtioBlkTransport &transport = ensure_mmio_transport(
+        g_secondary_transport, g_secondary_transport_storage,
+        riscv::board::k_secondary_block_mmio);
+    init_mmio_disk(riscv::board::k_secondary_block_mmio, device, transport,
+                   "virtio_disk2_lock", 2, "could not find virtio disk2");
+    register_block_irq(riscv::board::k_secondary_block_interrupt,
+                       device, "virtio-blk1");
 }
 
 void virtio_disk_rw(struct buf *b, int write)
@@ -239,11 +263,11 @@ uint64 virtio_disk_capacity_bytes(int dev)
     uintptr_t base = 0;
     if (dev == 0)
     {
-        base = VIRTIO0;
+        base = riscv::board::k_primary_block_mmio;
     }
     else if (dev == 1)
     {
-        base = VIRTIO1;
+        base = riscv::board::k_secondary_block_mmio;
     }
     else
     {
@@ -266,5 +290,3 @@ void virtio_disk_intr2()
 {
     g_secondary_device->handle_interrupt();
 }
-
-#endif

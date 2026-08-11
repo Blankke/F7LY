@@ -1,5 +1,6 @@
 #pragma once
 #include "devs/console.hh"
+#include "platform/profile.hh"
 #include "string.hh"
 // enum OutputLevel
 // 	{
@@ -186,29 +187,35 @@ public:
 };
 extern Printer k_printer;
 
-// 2K1000 实机的独立诊断通道。其它目标在编译期移除这些调用，因此不会改变
-// QEMU 评测输出，也不会为了看板级日志而放开整个内核的 info/warn 噪声。
-#ifdef BOARD_LS2K1000
+// 实机画像可打开独立启动诊断；QEMU 画像关闭它以保持评测输出稳定。
+// 选择策略属于平台画像，不再让日志层识别 BOARD_* 宏。
 #define boardPrintf(format, args...) \
-	k_printer.print_board_diagnostic(format, ##args)
+	do { if (platform::current_profile().verbose_boot_diagnostics) \
+		k_printer.print_board_diagnostic(format, ##args); } while (0)
 #define boardPrintfInfo(format, args...) \
-	k_printer.print_board_diagnostic("\33[1;32m" format "\33[0m", ##args)
+	do { if (platform::current_profile().verbose_boot_diagnostics) \
+		k_printer.print_board_diagnostic("\33[1;32m" format "\33[0m", ##args); } while (0)
 #define boardPrintfWarn(format, args...) \
-	k_printer.print_board_diagnostic("\33[1;33m" format "\33[0m", ##args)
+	do { if (platform::current_profile().verbose_boot_diagnostics) \
+		k_printer.print_board_diagnostic("\33[1;33m" format "\33[0m", ##args); } while (0)
 #define boardPrintfError(format, args...) \
-	k_printer.print_board_diagnostic("\33[1;31m" format "\33[0m", ##args)
-#else
-// 保留不可达调用用于格式和参数类型检查，同时让仅用于诊断的局部变量仍被
-// 编译器视为已使用；优化后不会生成调用或字符串数据。
-#define boardPrintf(format, args...) \
-	do { if (false) k_printer.print_board_diagnostic(format, ##args); } while (0)
-#define boardPrintfInfo(format, args...) \
-	do { if (false) k_printer.print_board_diagnostic(format, ##args); } while (0)
-#define boardPrintfWarn(format, args...) \
-	do { if (false) k_printer.print_board_diagnostic(format, ##args); } while (0)
-#define boardPrintfError(format, args...) \
-	do { if (false) k_printer.print_board_diagnostic(format, ##args); } while (0)
-#endif
+	do { if (platform::current_profile().verbose_boot_diagnostics) \
+		k_printer.print_board_diagnostic("\33[1;31m" format "\33[0m", ##args); } while (0)
+
+// 低频硬件诊断在实机 bring-up 画像中必须无条件可见；QEMU 画像仍服从原有
+// info/warn 调试开关，避免污染自动评测串口。三组宏保证同一条消息只打印一次。
+#define platformDiagnosticInfo(format, args...) \
+	do { if (platform::current_profile().verbose_boot_diagnostics) \
+		k_printer.print_board_diagnostic("\33[1;32m" format "\33[0m", ##args); \
+	else printfGreen(format, ##args); } while (0)
+#define platformDiagnosticWarn(format, args...) \
+	do { if (platform::current_profile().verbose_boot_diagnostics) \
+		k_printer.print_board_diagnostic("\33[1;33m" format "\33[0m", ##args); \
+	else printfYellow(format, ##args); } while (0)
+#define platformDiagnosticError(format, args...) \
+	do { if (platform::current_profile().verbose_boot_diagnostics) \
+		k_printer.print_board_diagnostic("\33[1;31m" format "\33[0m", ##args); \
+	else printfRed(format, ##args); } while (0)
 
 // printf 控制宏定义（必须放在类定义之后以避免宏展开冲突）
 #define enable_printf() Printer::enable_printf()

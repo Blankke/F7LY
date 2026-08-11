@@ -2,7 +2,7 @@
 
 #include "types.hh"
 #include "mem.hh"
-#include "platform.hh"
+#include "hal/arch.hh"
 #include <EASTL/unordered_map.h>
 
 namespace fs

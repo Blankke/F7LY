@@ -10,7 +10,7 @@
 #endif
 #include "common.hh"
 #include "printer.hh"
-#include "platform.hh"
+#include "hal/arch.hh"
 #include "physical_memory_manager.hh"
 namespace mem
 {

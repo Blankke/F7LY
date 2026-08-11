@@ -14,7 +14,7 @@
 #endif
 #include "pte.hh"
 #include "memlayout.hh"
-#include "platform.hh"
+#include "hal/arch.hh"
 #include "common.hh"
 #include "page.hh"
 namespace mem

@@ -1,7 +1,7 @@
 #include "vma_metadata_utils.hh"
 
 #include "physical_memory_manager.hh"
-#include "platform.hh"
+#include "hal/arch.hh"
 #include "vm_object.hh"
 #include "fs/vfs/file/file.hh"
 #include "shm/shm_manager.hh"

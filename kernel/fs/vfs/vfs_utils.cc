@@ -17,6 +17,7 @@
 #include "fs/vfs/vfs_ext4_ext.hh" // 包含 NS_to_S 宏
 #include "tm/time.hh"
 #include "mem/memlayout.hh"
+#include "mem/kernel_image.hh"
 #include "physical_memory_manager.hh"
 #include <EASTL/vector.h>
 #include <EASTL/algorithm.h>
@@ -29,11 +30,6 @@
 
 namespace
 {
-#ifdef RISCV
-    constexpr uint64 k_min_kernel_file_ptr = KERNBASE;
-#elif defined(LOONGARCH)
-    constexpr uint64 k_min_kernel_file_ptr = PHYSBASE;
-#endif
     constexpr size_t k_linux_path_max = 4096;
     constexpr size_t k_linux_name_max = 255;
     constexpr size_t k_truncate_zero_fill_limit = PGSIZE;
@@ -1504,7 +1500,7 @@ namespace
 
     inline bool is_kernel_mapped_file_range(uint64 addr, uint64 size)
     {
-        if (addr < k_min_kernel_file_ptr || size == 0)
+        if (addr < mem::kernel_image_start_address() || size == 0)
         {
             return false;
         }

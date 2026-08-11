@@ -16,10 +16,12 @@ namespace dev
     class ConsoleTermiosController
     {
     public:
-        // 保存用户可见 termios 状态，并把它同步到 console line discipline。
+        // 构造阶段只保存用户可见 termios 默认值，不访问其他全局对象。
         // TCGETS/TCSETS 与 TCGETA/TCSETA 共用同一个控制器，避免两套状态漂移。
         ConsoleTermiosController();
 
+        // Console 自身的锁和状态建立后显式调用，消除跨翻译单元的全局构造顺序依赖。
+        void initialize_line_discipline();
         abi::KernelTermios snapshot() const;
         abi::KernelTermio legacy_snapshot() const;
         ConsoleReadSettings read_settings() const;

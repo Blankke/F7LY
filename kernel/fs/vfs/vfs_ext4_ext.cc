@@ -3,7 +3,7 @@
 
 #include "tm/timer_manager.hh"
 #include "tm/time.h"
-#include "platform.hh"
+#include "hal/arch.hh"
 #include "fs/vfs/file.hh"
 #include "fs/vfs/fs.hh"
 #include "fs/stat.hh"
@@ -346,36 +346,6 @@ int vfs_ext_mount(struct filesystem *fs, uint64_t rwflag, void *data) {
     }
 out:
     return r;
-}
-
-//For rootfs
-int vfs_ext_mount2(struct filesystem *fs, uint64_t rwflag, void *data) {
-    int r = 0;
-    [[maybe_unused]] struct ext4_blockdev *bdev = NULL;
-    struct vfs_ext4_blockdev *vbdev = vfs_ext4_blockdev_create2(fs->dev);
-
-    if (vbdev == NULL) {
-        r = -ENOMEM;
-        goto out;
-    }
-
-    bdev = &vbdev->bd;
-    r = ext4_mount("root_fs", fs->path, false);
-
-    if (r != EOK) {
-        vfs_ext4_blockdev_destroy(vbdev);
-        goto out;
-    } else {
-        r = vfs_ext4_finish_mount(fs->path, vbdev);
-        if (r != EOK) {
-            goto out;
-        }
-        fs->fs_data = vbdev;
-        //获得ext4文件系统的超级块
-        // ext4_get_sblock(fs->path, (struct ext4_sblock **)(&(fs->fs_data)));
-    }
-    out:
-        return r;
 }
 
 int vfs_ext_statfs(struct filesystem *fs, struct statfs *buf) {

@@ -29,7 +29,7 @@ namespace tmm
 
 		int64_t cycles_to_ns(uint64 cycles)
 		{
-			uint64 freq = tmm::get_main_frequence();
+			uint64 freq = tmm::clock_frequency_hz();
 			return static_cast<int64_t>((cycles / freq) * k_nsec_per_sec +
 			                            ((cycles % freq) * k_nsec_per_sec) / freq);
 		}
@@ -89,7 +89,7 @@ namespace tmm
 
 		void cycles_to_timespec(uint64 cycles, uint64 sec_base, timespec *tp)
 		{
-			uint64 freq = tmm::get_main_frequence();
+			uint64 freq = tmm::clock_frequency_hz();
 			tp->tv_sec = (long)(sec_base + cycles / freq);
 			uint64 rest_cyc = cycles % freq;
 			tp->tv_nsec = (long)((rest_cyc * tmm::_1G_dec) / freq);
@@ -210,7 +210,7 @@ namespace tmm
 	int TimerManager::sleep_from_tv(timeval tv)
 	{
 		// 将秒转换为周期数
-		uint64 n = tv.tv_sec * tmm::get_main_frequence();
+		uint64 n = tv.tv_sec * tmm::clock_frequency_hz();
 		uint64 cpt = tmm::cycles_per_tick(); // 每个tick的周期数
 		
 		// 将微秒转换为周期数并累加
@@ -242,7 +242,7 @@ namespace tmm
 
 		uint64 t_val;
 		uint64 cpt = tmm::cycles_per_tick();  // 每个tick的周期数
-		uint64 freq = tmm::get_main_frequence(); // 主频率
+		uint64 freq = tmm::clock_frequency_hz(); // 恒定计数器频率
 
 		// 根据不同的时钟类型获取相应的时间
 		switch (cid)

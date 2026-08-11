@@ -1,7 +1,7 @@
 // F7LY 网络栈集成：通过板级网卡门面连接 ONPS。
 
 #include "f7ly_network.hh"
-#include "drivers/virtio_net_adapter.hh"
+#include "drivers/onps_adapter.hh"
 #include "drivers/platform_net_device.hh"
 #include "libs/printer.hh"
 #include "onps.hh"

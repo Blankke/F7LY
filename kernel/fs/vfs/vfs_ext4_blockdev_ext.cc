@@ -11,6 +11,7 @@
 #include "fs/lwext4/ext4_errno.hh"
 #include "libs/string.hh"
 #include "libs/klib.hh"
+#include "param.h"
 #include "mem/physical_memory_manager.hh"
 
 namespace
@@ -22,12 +23,10 @@ namespace
     constexpr uint32 k_ext4_dma_bounce_block_capacity =
         k_ext4_dma_bounce_bytes / k_ext4_physical_block_size;
 
-    // 目前工程里仍然只有两块 ext4 设备入口：数据盘与 rootfs。
-    // 接口对象和设备对象保持静态存储期，避免在挂载早期再引入额外堆分配。
+    // ext4 块设备对象保持静态存储期，避免在挂载早期引入额外堆分配。
+    // 根文件系统和其它 ext4 设备统一走设备号和实际容量描述的同一条路径。
     struct ext4_blockdev_iface biface;
     struct vfs_ext4_blockdev bvbdev;
-    struct ext4_blockdev_iface biface2;
-    struct vfs_ext4_blockdev bvbdev2;
 } // namespace
 
 static int blockdev_lock(struct ext4_blockdev *bdev);
@@ -35,8 +34,6 @@ static int blockdev_unlock(struct ext4_blockdev *bdev);
 static int blockdev_open(struct ext4_blockdev *bdev);
 static int blockdev_read(struct ext4_blockdev *bdev, void *buf, uint64_t blk_id, uint32_t blk_cnt);
 static int blockdev_write(struct ext4_blockdev *bdev, const void *buf, uint64_t blk_id, uint32_t blk_cnt);
-int blockdev_read2(struct ext4_blockdev *bdev, void *buf, uint64_t blk_id, uint32_t blk_cnt);
-int blockdev_write2(struct ext4_blockdev *bdev, const void *buf, uint64_t blk_id, uint32_t blk_cnt);
 static int blockdev_rw_common(struct ext4_blockdev *bdev, void *buf, uint64_t blk_id, uint32_t blk_cnt, bool write);
 static int blockdev_close(struct ext4_blockdev *bdev);
 
@@ -100,10 +97,22 @@ static int vfs_ext4_blockdev_init_common(struct vfs_ext4_blockdev *vbdev,
 
 static int vfs_ext4_blockdev_init(struct vfs_ext4_blockdev *vbdev, int dev)
 {
-    uint64 capacity = platform_block_capacity_bytes(dev);
+    uint64 capacity = 0;
+    if (dev == ROOTDEV)
+    {
+        capacity = platform_block_capacity_bytes(dev);
+    }
+    else
+    {
+        dev::VirtualDevice *vdev = dev::k_devm.get_device(dev);
+        if (vdev != nullptr && vdev->type() == dev::DeviceType::dev_block)
+        {
+            capacity = static_cast<dev::BlockDevice *>(vdev)->capacity_bytes();
+        }
+    }
     if (capacity == 0)
     {
-        printf("platform block device %d did not report a capacity\n", dev);
+        printf("block device %d did not report a capacity\n", dev);
         return -ENODEV;
     }
     return vfs_ext4_blockdev_init_common(vbdev,
@@ -113,17 +122,6 @@ static int vfs_ext4_blockdev_init(struct vfs_ext4_blockdev *vbdev, int dev)
                                          blockdev_read,
                                          blockdev_write,
                                          const_cast<char *>("ext4_bdev_io"));
-}
-
-static int vfs_ext4_blockdev_init2(struct vfs_ext4_blockdev *vbdev, int dev)
-{
-    return vfs_ext4_blockdev_init_common(vbdev,
-                                         dev,
-                                         &biface2,
-                                         768ull * 1024ull * 1024ull,
-                                         blockdev_read2,
-                                         blockdev_write2,
-                                         const_cast<char *>("ext4_bdev_io_root"));
 }
 
 struct vfs_ext4_blockdev *vfs_ext4_blockdev_create(int dev)
@@ -137,26 +135,6 @@ struct vfs_ext4_blockdev *vfs_ext4_blockdev_create(int dev)
     }
 
     r = ext4_device_register(&vbdev->bd, DEV_NAME);
-    if (r != EOK)
-    {
-        printf("ext4_device_register failed: %d\n", r);
-        vfs_ext4_blockdev_destroy(vbdev);
-        return nullptr;
-    }
-    return vbdev;
-}
-
-struct vfs_ext4_blockdev *vfs_ext4_blockdev_create2(int dev)
-{
-    struct vfs_ext4_blockdev *vbdev = &bvbdev2;
-    int r = vfs_ext4_blockdev_init2(vbdev, dev);
-    if (r != EOK)
-    {
-        printf("vfs_ext4_blockdev_init failed: %d\n", r);
-        return nullptr;
-    }
-
-    r = ext4_device_register(&vbdev->bd, "root_fs");
     if (r != EOK)
     {
         printf("ext4_device_register failed: %d\n", r);
@@ -228,6 +206,14 @@ namespace
 {
     int submit_sector_transfer(int dev, void *buf, uint64 start_sector, uint32 sector_count, bool write)
     {
+        // ROOTDEV 是平台块层选出的逻辑根分区，不在通用 DeviceManager 中
+        // 伪装成字符设备号 0。其它设备必须显式注册，查找失败不能回退根盘。
+        if (dev == ROOTDEV)
+        {
+            return platform_block_rw_sectors(dev, buf, start_sector,
+                                             sector_count, write ? 1 : 0);
+        }
+
         dev::VirtualDevice *vdev = dev::k_devm.get_device(dev);
         if (vdev != nullptr && vdev->type() == dev::DeviceType::dev_block)
         {
@@ -242,8 +228,7 @@ namespace
             }
             return bd->read_blocks(start_sector, sector_count, &desc, 1);
         }
-
-        return platform_block_rw_sectors(dev, buf, start_sector, sector_count, write ? 1 : 0);
+        return -ENODEV;
     }
 } // namespace
 
@@ -307,16 +292,6 @@ static int blockdev_read(struct ext4_blockdev *bdev, void *buf, uint64_t blk_id,
 }
 
 static int blockdev_write(struct ext4_blockdev *bdev, const void *buf, uint64_t blk_id, uint32_t blk_cnt)
-{
-    return blockdev_rw_common(bdev, const_cast<void *>(buf), blk_id, blk_cnt, true);
-}
-
-int blockdev_read2(struct ext4_blockdev *bdev, void *buf, uint64_t blk_id, uint32_t blk_cnt)
-{
-    return blockdev_rw_common(bdev, buf, blk_id, blk_cnt, false);
-}
-
-int blockdev_write2(struct ext4_blockdev *bdev, const void *buf, uint64_t blk_id, uint32_t blk_cnt)
 {
     return blockdev_rw_common(bdev, const_cast<void *>(buf), blk_id, blk_cnt, true);
 }

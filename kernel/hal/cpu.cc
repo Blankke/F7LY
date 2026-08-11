@@ -1,10 +1,6 @@
 #include "cpu.hh"
+#include "tm/platform_clock_backend.hh"
 #include <EASTL/atomic.h>
-#ifdef RISCV
-#include "rv_csr.hh"
-#elif defined(LOONGARCH)
-#include "la_csr.hh"
-#endif
 Cpu k_cpus[NUMCPU];
 
 namespace
@@ -137,16 +133,6 @@ bool Cpu::is_bootstrap_ready()
     return g_bootstrap_state.load(eastl::memory_order_acquire) == k_bootstrap_ready;
 }
 
-void Cpu::wait_for_all_possible_cpus_online()
-{
-    // possible mask 由主核在 DTB 解析后一次写入；online mask 只会由次核在
-    // 完成本地页表、trap 和 CPU 槽位初始化后置位。因此相等时可安全开始调度。
-    while (online_cpu_mask() != possible_cpu_mask())
-    {
-        asm volatile("" ::: "memory");
-    }
-}
-
 void Cpu::publish_scheduler_ready()
 {
     // release 与次核 wait_for_scheduler_ready() 的 acquire 配对，保证次核在
@@ -245,12 +231,7 @@ bool Cpu::advance_time_slice(uint32 limit)
 
 uint64 Cpu::get_time()
 {
-	#ifdef RISCV
-	return r_time();
-	#elif defined (LOONGARCH)
-	return r_csr_tval();
-	//loongarch 不需要这个函数
-	#endif
+	return platform::clock_backend::read_ticks();
 }
 
 void Cpu::push_intr_off()

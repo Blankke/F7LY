@@ -3,12 +3,8 @@
 #include "proc/proc.hh"
 #include "printer.hh"
 #include "param.h"
+#include "hal/arch.hh"
 #include <EASTL/atomic.h>
-#ifdef RISCV
-#include "riscv/rv_csr.hh"
-#elif defined(LOONGARCH)
-#include "loongarch/la_csr.hh"
-#endif
 
 class Cpu
 {
@@ -77,10 +73,6 @@ public:
         static void publish_bootstrap_ready();
         static void wait_for_bootstrap_ready();
         static bool is_bootstrap_ready();
-        // 全局对象就绪后，仍要等每个 possible CPU 完成本地 CSR/trap 初始化；
-        // 只有主核确认全员 online 后才统一放行 scheduler，避免用户任务落在
-        // “拓扑已声明、但次核尚未可调度”的窗口内。
-        static void wait_for_all_possible_cpus_online();
         static void publish_scheduler_ready();
         static void wait_for_scheduler_ready();
         static uint64 bootstrap_cpu_id();
@@ -103,7 +95,7 @@ public:
         static inline int get_intr_stat()
         {
 #ifdef RISCV
-                uint64 x = riscv::r_sstatus();
+                uint64 x = r_sstatus();
                 return (x & SSTATUS_SIE) != 0;
 #elif defined(LOONGARCH)
                 uint64 x = r_csr_crmd(); // 假设 crmd 对应 mstatus CSR

@@ -1,10 +1,10 @@
 #include "ls2k1000_ahci.hh"
 
-#ifdef BOARD_LS2K1000
+#include "platform/block_backend.hh"
 
 #include "hal/loongarch/platform_board.hh"
 #include "libs/klib.hh"
-#include "platform.hh"
+#include "hal/arch.hh"
 #include "printer.hh"
 #include "spinlock.hh"
 #include "tm/time.hh"
@@ -13,7 +13,7 @@ namespace loongarch::ls2k1000::ahci
 {
 namespace
 {
-    constexpr uint32 k_sector_size = 512;
+    constexpr uint32 k_sector_size = platform::block_backend::k_sector_size_bytes;
     constexpr uint32 k_bounce_sectors = 128;
     constexpr uint32 k_bounce_bytes = k_bounce_sectors * k_sector_size;
     constexpr uint64 k_hba_timeout_us = 1'000'000;
@@ -178,7 +178,7 @@ namespace
     bool wait_clear(uint64 offset, uint32 mask, uint64 timeout_us)
     {
         const uint64 start = rdtime();
-        const uint64 timeout_cycles = tmm::qemu_fre_cal_cycles(timeout_us);
+        const uint64 timeout_cycles = tmm::microseconds_to_cycles(timeout_us);
         while (!timeout_reached(start, timeout_cycles))
         {
             if ((read32(offset) & mask) == 0)
@@ -193,7 +193,7 @@ namespace
     bool wait_link_ready()
     {
         const uint64 start = rdtime();
-        const uint64 timeout_cycles = tmm::qemu_fre_cal_cycles(k_link_timeout_us);
+        const uint64 timeout_cycles = tmm::microseconds_to_cycles(k_link_timeout_us);
         while (!timeout_reached(start, timeout_cycles))
         {
             const uint32 status = read32(port_offset(k_port_ssts));
@@ -285,7 +285,7 @@ namespace
         uint32 control = read32(port_offset(k_port_sctl));
         write32(port_offset(k_port_sctl), (control & ~0xfU) | 1U);
         const uint64 reset_start = rdtime();
-        const uint64 reset_cycles = tmm::qemu_fre_cal_cycles(k_comreset_hold_us);
+        const uint64 reset_cycles = tmm::microseconds_to_cycles(k_comreset_hold_us);
         while (!timeout_reached(reset_start, reset_cycles))
         {
             asm volatile("nop");
@@ -366,7 +366,7 @@ namespace
         write32(port_offset(k_port_ci), 1U);
 
         const uint64 start = rdtime();
-        const uint64 timeout_cycles = tmm::qemu_fre_cal_cycles(k_command_timeout_us);
+        const uint64 timeout_cycles = tmm::microseconds_to_cycles(k_command_timeout_us);
         while (!timeout_reached(start, timeout_cycles))
         {
             const uint32 irq_status = read32(port_offset(k_port_is));
@@ -576,5 +576,3 @@ uint64 capacity_bytes()
     return g_capacity_sectors * static_cast<uint64>(k_sector_size);
 }
 } // namespace loongarch::ls2k1000::ahci
-
-#endif

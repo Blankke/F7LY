@@ -1,8 +1,19 @@
 #include "console.hh"
+#include "console_termios.hh"
+#include "hal/irq.hh"
+#include "platform/console_backend.hh"
+#include "printer.hh"
 #include "proc_manager.hh"
-#include "global_operator.hh"
 namespace dev
 {
+  namespace
+  {
+    void uart_irq_handler(void *)
+    {
+      k_uart.handle_intr();
+    }
+  }
+
   Console kConsole; // 全局控制台对象
 
   Console::Console()
@@ -22,16 +33,27 @@ namespace dev
   void Console::init()
   {
     _lock.init("console");
+    // termios 全局对象只保存 ABI 状态；等 Console 的锁可用后，再明确把
+    // 默认配置交给行规程，避免依赖不同翻译单元的全局构造先后顺序。
+    k_console_termios.initialize_line_discipline();
 
-    // 内核链接脚本不保留 .init_array，因此 C++ 全局对象不会自动执行
-    // 构造函数。UartManager 是多态类，若只调用 init()，其虚函数表指针
-    // 仍为空，将在 /dev/stdin 绑定时触发内核页故障。这里是全局 UART
-    // 的唯一初始化入口，必须先显式构造，再初始化硬件和锁。
-    new (&k_uart) UartManager();
+    // 控制台、中断分发和 /dev/stdin 共享同一个软件 UART 实例；具体
+    // MMIO/SBI 传输由当前平台后端在 initialize() 中建立。
+    if (!k_uart.initialize())
+    {
+      panic("console backend %s initialization failed",
+            platform::console_backend::name());
+    }
 
-    // 控制台、中断分发和 /dev/stdin 共享同一个 UART 实例，避免两套
-    // 环形缓冲和锁分别消费同一硬件 FIFO。
-    k_uart.init(UART0);
+    const platform::console_backend::InterruptSource source =
+        platform::console_backend::interrupt_source();
+    if (source.present &&
+        !hal::irq::register_handler(source.source, uart_irq_handler, nullptr,
+                                    "console"))
+    {
+      panic("console backend %s failed to register interrupt source %u",
+            platform::console_backend::name(), source.source);
+    }
   }
 
   void Console::console_putc(int c)

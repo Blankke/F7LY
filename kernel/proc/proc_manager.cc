@@ -9,6 +9,7 @@
 #include "virtual_memory_manager.hh"
 #include "scheduler.hh"
 #include "mem/memlayout.hh" // 内核栈配置常量
+#include "mem/kernel_image.hh"
 #ifdef RISCV
 #include "riscv/trap.hh"
 #elif defined(LOONGARCH)
@@ -21,11 +22,6 @@
 #include "vm_object.hh"
 #include "vma_metadata_utils.hh"
 #include "shm_manager.hh"
-#ifdef RISCV
-// #include "devs/riscv/disk_driver.hh"
-#elif defined(LOONGARCH)
-#include "devs/loongarch/disk_driver.hh"
-#endif
 #include "net/platform_network.hh"
 
 // #include "fs/vfs/dentrycache.hh"
@@ -68,11 +64,6 @@ namespace proc
 {
     namespace
     {
-#ifdef RISCV
-        constexpr uint64 k_min_kernel_file_ptr = KERNBASE;
-#elif defined(LOONGARCH)
-        constexpr uint64 k_min_kernel_file_ptr = PHYSBASE;
-#endif
         inline uint32 max_reasonable_file_refcnt()
         {
             return num_process * max_open_files;
@@ -282,7 +273,7 @@ namespace proc
 
         inline bool is_kernel_mapped_file_range(uint64 addr, uint64 size)
         {
-            if (addr < k_min_kernel_file_ptr || size == 0)
+            if (addr < mem::kernel_image_start_address() || size == 0)
             {
                 return false;
             }
@@ -1517,8 +1508,6 @@ namespace proc
             // 文件系统初始化必须在常规进程的上下文中运行（例如，因为它会调用 sleep），
             // 因此不能从 main() 中运行。(copy form xv6)
             filesystem_init(); // <-- This calls fs.cc:filesystem_init
-
-            // filesystem2_init(); // 这个滚蛋
             fs::FileAttrs fAttrsin = fs::FileAttrs(fs::FileTypes::FT_DEVICE, 0666);
             fs::device_file *f_in = new fs::device_file(fAttrsin, "/dev/stdin", 0);
             eastl::string pathout("/dev/stdout");

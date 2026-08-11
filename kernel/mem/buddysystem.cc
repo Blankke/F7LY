@@ -3,7 +3,7 @@
 #include "types.hh"
 #include "klib.hh"
 #include "printer.hh"
-#include "platform.hh"
+#include "hal/arch.hh"
 
 namespace mem
 {

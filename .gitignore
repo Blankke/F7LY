@@ -21,8 +21,6 @@ sdcard-la.img
 sdcard-rv-final.img
 sdcard-la-final.img
 user/disasm_initcode.asm
-user/initcode-rv
-user/shell-initcode-*
 output.txt
 out.txt
 disasm_busybox.asm
@@ -33,7 +31,6 @@ disasm_musl_busybox.asm
 busybox_musl_unstripped.asm
 temp.asm
 disasm_initcode.asm
-user/initcode-la
 output-la.txt
 output-rv.txt
 disasm_busybox_glibc.asm
@@ -64,6 +61,7 @@ images/rootfs.img
 images/initrd.img
 images/sdcard-*.img
 images/sdcard-bak/
+images/bak/
 logs/run/
 logs/tmp/
 !logs/

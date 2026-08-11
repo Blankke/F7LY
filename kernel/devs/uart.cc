@@ -1,350 +1,272 @@
 #include "uart.hh"
-#include "printer.hh"
+
 #include "console.hh"
-#include"device_manager.hh"
-#ifdef RISCV
-#include "hal/riscv/sbi.hh"
-#endif
+#include "device_manager.hh"
+#include "platform/console_backend.hh"
+#include "printer.hh"
 
 namespace dev
 {
-	UartManager k_uart;
-	void register_debug_uart( CharDevice* uart_port )
-	{
-		k_devm.register_char_device( ( CharDevice * ) uart_port, DEFAULT_DEBUG_CONSOLE_NAME );
-		k_stdin.redirect_stream( ( CharDevice * ) uart_port );
-		k_stdout.redirect_stream( ( CharDevice * ) uart_port );
-		k_stderr.redirect_stream( ( CharDevice * ) uart_port );
-	}
-	void UartManager::init(uint64 u_addr)
-	{
-		_uart_base = u_addr;
+namespace
+{
+    void report_line_errors(const platform::console_backend::LineStatus &status)
+    {
+        if (status.new_errors == 0)
+        {
+            return;
+        }
 
-		_write_reg(UartReg::IER, 0x0);
-#ifndef BOARD_LS2K1000
-		// QEMU 的 UART 输入时钟固定，可使用历史 divisor=3。2K1000 的时钟来自
-		// 板级时钟树，启动 DTB 又没有把时钟计算接入本驱动，因此实机保留
-		// U-Boot 已配置好的 115200 divisor，避免用 QEMU 魔数破坏早期串口。
-		_write_reg(UartReg::LCR, UartLCR::access_baud);
-		_write_reg(UartBaud::low_8_bit, 0x03);
-		_write_reg(UartBaud::high_8_bit, 0x00);
-#endif
-		_write_reg(UartReg::LCR, UartLCR::use_8_bits);
-		_write_reg(UartReg::FCR, UartFCR::enable | UartFCR::clear);
-		_write_reg(UartReg::IER, UartIER::rx_en);
+        // 后端只会把每一种新出现的错误位上报一次，既保留实机排障线索，
+        // 又不会让损坏的串口线路持续刷屏并掩盖后续启动阶段。
+        boardPrintfError(
+            "[console] backend=%s line-error raw=0x%x new=0x%x\n",
+            platform::console_backend::name(), status.raw, status.new_errors);
+    }
+} // namespace
 
-		_lock.init("uart");
-		_wr_idx = _rd_idx = 0;
-		_pending_input_valid = false;
-		_pending_input = 0;
-		_reported_line_errors = 0;
-	}
+UartManager k_uart;
 
-	bool UartManager::read_ready()
-	{
-		_lock.acquire();
-		bool ready = _pending_input_valid;
-#ifdef RISCV
-		if (!ready)
-		{
-			const int ch = sbi_console_getchar();
-			if (ch >= 0)
-			{
-				_pending_input = static_cast<u8>(ch);
-				_pending_input_valid = true;
-				ready = true;
-			}
-		}
-#else
-		ready = ready || (_read_reg(UartReg::LSR) & UartLSR::rx_ready) != 0;
-#endif
-		_lock.release();
-		return ready;
-	}
+void register_debug_uart(CharDevice *uart_port)
+{
+    k_devm.register_char_device(uart_port, DEFAULT_DEBUG_CONSOLE_NAME);
+    k_stdin.redirect_stream(uart_port);
+    k_stdout.redirect_stream(uart_port);
+    k_stderr.redirect_stream(uart_port);
+}
 
-	bool UartManager::write_ready()
-	{
-		_lock.acquire();
-		const bool ready = !_write_buffer_full();
-		_lock.release();
-		return ready;
-	}
+bool UartManager::initialize()
+{
+    _lock.init("uart");
+    _write_index = 0;
+    _read_index = 0;
+    _pending_input_valid = false;
+    _pending_input = 0;
+    return platform::console_backend::initialize();
+}
 
-	int UartManager::put_char_sync(u8 c)
-	{
-		// 同步输出也进入同一发送队列，保证它不会越过已经排队的换行等字符。
-		// 等待期间不持有 UART 锁，发送中断才能继续排空队列。
-		if (put_char(c) < 0)
-		{
-			return -1;
-		}
-		for (;;)
-		{
-			_lock.acquire();
-			start();
-			const bool submitted = _wr_idx == _rd_idx;
-			_lock.release();
-			if (submitted)
-			{
-				return 0;
-			}
-			asm volatile("nop");
-		}
-	}
+bool UartManager::read_ready()
+{
+    _lock.acquire();
+    if (!_pending_input_valid)
+    {
+        _pending_input_valid =
+            platform::console_backend::try_getc(_pending_input);
+    }
+    const bool ready = _pending_input_valid;
+    _lock.release();
+    return ready;
+}
 
-	int UartManager::put_char(u8 c)
-	{
-		if (k_printer.is_panic())
-		{
-			while (1)
-				;
-		}
+bool UartManager::write_ready()
+{
+    _lock.acquire();
+    const bool ready = !output_buffer_full();
+    _lock.release();
+    return ready;
+}
 
-		while (1)
-		{
-			_lock.acquire();
-			if (_write_buffer_full())
-			{
-				// 尽量主动推进一次；若硬件仍忙，必须释放锁等待发送中断，
-				// 不能拿着锁自旋，否则中断处理函数永远无法腾出空间。
-				start();
-				if (_write_buffer_full())
-				{
-					_lock.release();
-					asm volatile("nop");
-					continue;
-				}
-			}
+int UartManager::put_char_sync(u8 character)
+{
+    // 同步输出也进入唯一发送队列，不能越过之前已经排队的字符。
+    if (put_char(character) < 0)
+    {
+        return -1;
+    }
 
-			_buf[_wr_idx % _buf_size] = c;
-			_wr_idx += 1;
-			start();
-			_lock.release();
-			return 0;
-		}
-	}
+    for (;;)
+    {
+        _lock.acquire();
+        start_transmit_locked();
+        const bool submitted = _write_index == _read_index;
+        _lock.release();
+        if (submitted)
+        {
+            return 0;
+        }
+        asm volatile("nop");
+    }
+}
 
-	int UartManager::get_char_sync(u8* c)
-	{
-		if (c == nullptr)
-			return -1;
-		// 轮询调用非阻塞读取，每次失败都已经释放锁；这样 RX 中断不会因
-		// 同步读取持锁等待硬件而发生自旋死锁。
-		while (get_char(c) < 0)
-		{
-			asm volatile("nop");
-		}
-		return 0;
-	}
+int UartManager::put_char(u8 character)
+{
+    if (k_printer.is_panic())
+    {
+        for (;;)
+        {
+            asm volatile("nop");
+        }
+    }
 
-	int UartManager::get_char(u8 *c)
-	{
-		if (c == nullptr)
-			return -1;
-		_lock.acquire();
-		if (_pending_input_valid)
-		{
-			*c = _pending_input;
-			_pending_input_valid = false;
-			_lock.release();
-			return 0;
-		}
-#ifdef RISCV
-		const int ch = sbi_console_getchar();
-		if (ch >= 0)
-		{
-			*c = static_cast<u8>(ch);
-			_lock.release();
-			return 0;
-		}
-#else
-		if ((_read_reg(UartReg::LSR) & UartLSR::rx_ready) != 0)
-		{
-			*c = _read_reg(UartReg::RHR);
-			_lock.release();
-			return 0;
-		}
-#endif
-		_lock.release();
-		return -1;
-	}
+    for (;;)
+    {
+        _lock.acquire();
+        if (output_buffer_full())
+        {
+            // 主动推进一次后仍满，就释放锁等待 TX-ready。拿锁自旋会让
+            // 中断处理函数永远无法排空同一队列。
+            start_transmit_locked();
+            if (output_buffer_full())
+            {
+                _lock.release();
+                asm volatile("nop");
+                continue;
+            }
+        }
 
-	void UartManager::start()
-	{
-		volatile regLSR *lsr = (volatile regLSR *)(_uart_base + LSR);
-		volatile char *thr = (volatile char *)(_uart_base + THR);
-		while (1)
-		{
-			if (_wr_idx == _rd_idx)
-			{
-				// transmit buffer is empty.
-				_write_reg(UartReg::IER, UartIER::rx_en);
-				return;
-			}
+        _output_buffer[_write_index % k_output_buffer_size] =
+            static_cast<char>(character);
+        ++_write_index;
+        start_transmit_locked();
+        _lock.release();
+        return 0;
+    }
+}
 
-			if (lsr->thr_empty == 0)
-			{
-				// the UART transmit holding register is full,
-				// 打开发送空中断，硬件就绪后由 handle_intr() 继续排空队列。
-				_write_reg(UartReg::IER, UartIER::rx_en | UartIER::tx_en);
-				return;
-			}
+int UartManager::get_char_sync(u8 *character)
+{
+    if (character == nullptr)
+    {
+        return -1;
+    }
 
-			char c = _buf[_rd_idx % _buf_size];
-			_rd_idx += 1;
+    // 每次失败都已释放锁，RX 中断可以并发把字节送入 Console 行规程。
+    while (get_char(character) < 0)
+    {
+        asm volatile("nop");
+    }
+    return 0;
+}
 
-			// maybe uartputc() is waiting for space in the buffer.
-			// TODO: wakeup_at( &_rd_idx );
+int UartManager::get_char(u8 *character)
+{
+    if (character == nullptr)
+    {
+        return -1;
+    }
 
-			*thr = c;
-		}
-	}
+    _lock.acquire();
+    if (_pending_input_valid)
+    {
+        *character = _pending_input;
+        _pending_input_valid = false;
+        _lock.release();
+        return 0;
+    }
 
-	void UartManager::_write_reg(uint32 reg, uint8 data)
-	{
-		*(volatile unsigned char *)(_uart_base + reg) = data;
-	}
+    const bool ready = platform::console_backend::try_getc(*character);
+    _lock.release();
+    return ready ? 0 : -1;
+}
 
-	uint8 UartManager::_read_reg(uint32 reg)
-	{
-		return *(volatile unsigned char *)(_uart_base + reg);
-	}
+void UartManager::start_transmit_locked()
+{
+    while (_read_index != _write_index)
+    {
+        const u8 character = static_cast<u8>(
+            _output_buffer[_read_index % k_output_buffer_size]);
+        if (!platform::console_backend::try_putc(character))
+        {
+            // 后端仍忙时只打开通知；软件队列及索引始终归本类所有。
+            platform::console_backend::set_transmit_interrupt_enabled(true);
+            return;
+        }
+        ++_read_index;
+    }
 
-	uint8 UartManager::read_lsr()
-	{
-		return _read_reg(UartReg::LSR);
-	}
+    // 队列已经全部交给硬件，关闭 TX 空中断以避免无意义的中断风暴。
+    platform::console_backend::set_transmit_interrupt_enabled(false);
+}
 
-	uint8 UartManager::read_rhr()
-	{
-		return _read_reg(UartReg::RHR);
-	}
+int UartManager::handle_intr()
+{
+    for (;;)
+    {
+        u8 character = 0;
+        _lock.acquire();
+        bool received = false;
+        if (_pending_input_valid)
+        {
+            // read_ready() 为 SBI 等破坏性探测保存的字节仍属于输入流头部。
+            // IRQ 必须先提交它，不能越过它去读取后续硬件字节而打乱顺序。
+            character = _pending_input;
+            _pending_input_valid = false;
+            received = true;
+        }
+        else
+        {
+            received = platform::console_backend::try_getc(character);
+        }
+        start_transmit_locked();
+        const platform::console_backend::LineStatus status =
+            platform::console_backend::line_status();
+        _lock.release();
 
-	void UartManager::write_thr(uint8 data)
-	{
-		_write_reg(UartReg::THR, data);
-	}
-	//=========================中断相关==========================
-	int UartManager::handle_intr()
-	{
-		// 处理接收到的字符
-		while (1)
-		{
-			_lock.acquire();
-			const uint8 line_status = _read_reg(UartReg::LSR);
-			const uint8 new_line_errors =
-				(line_status & UartLSR::line_error_mask) & ~_reported_line_errors;
-			_reported_line_errors |= new_line_errors;
-			if ((line_status & UartLSR::rx_ready) == 0)
-			{
-				start();
-				_lock.release();
-				if (new_line_errors != 0)
-				{
-					boardPrintfError("[uart] line error: lsr=0x%x new=0x%x\n",
-					                 line_status, new_line_errors);
-				}
-				break;
-			}
+        report_line_errors(status);
+        if (!received)
+        {
+            break;
+        }
 
-			// 硬件 FIFO 只在 UART 锁内消费；释放锁后再进入 Console，避免
-			// 与回显路径形成 UART -> Console -> UART 的锁嵌套。
-			u8 c = _read_reg(UartReg::RHR);
-			_lock.release();
-			if (new_line_errors != 0)
-			{
-				boardPrintfError("[uart] line error: lsr=0x%x new=0x%x\n",
-				                 line_status, new_line_errors);
-			}
-			kConsole.console_intr(c);
-		}
-		return 0;
-	}
-	
-	int UartManager::get_input_buffer_size()
-	{
-		_lock.acquire();
-		// Console 行规程是唯一的软件 RX 队列；UART 这里只报告硬件/peek 字节。
-		int bytes_available = _pending_input_valid ? 1 : 0;
-#ifdef RISCV
-		if (!_pending_input_valid)
-		{
-			const int ch = sbi_console_getchar();
-			if (ch >= 0)
-			{
-				_pending_input = static_cast<u8>(ch);
-				_pending_input_valid = true;
-				bytes_available = 1;
-			}
-		}
-#else
-		bytes_available = bytes_available != 0 ||
-		                          (_read_reg(UartReg::LSR) & UartLSR::rx_ready) != 0
-		                      ? 1
-		                      : 0;
-#endif
-		_lock.release();
-		return bytes_available;
-	}
-	
-	int UartManager::get_output_buffer_size()
-	{
-		_lock.acquire();
-		// 计算写缓冲区中的字节数
-		int bytes_buffered;
-		bytes_buffered = static_cast<int>(_wr_idx - _rd_idx);
-		_lock.release();
-		return bytes_buffered;
-	}
-	
-	int UartManager::flush_buffer(int queue)
-	{
-		_lock.acquire();
-		
-		switch(queue) {
-			case 0: // TCIFLUSH - 清空输入缓冲区
-				_pending_input_valid = false;
-#ifdef RISCV
-				while (sbi_console_getchar() >= 0) {}
-#else
-				while ((_read_reg(UartReg::LSR) & UartLSR::rx_ready) != 0)
-					(void)_read_reg(UartReg::RHR);
-#endif
-				break;
-			case 1: // TCOFLUSH - 清空输出缓冲区  
-				_wr_idx = _rd_idx = 0;
-				_write_reg(UartReg::IER, UartIER::rx_en);
-				break;
-			case 2: // TCIOFLUSH - 清空输入和输出缓冲区
-				_pending_input_valid = false;
-#ifdef RISCV
-				while (sbi_console_getchar() >= 0) {}
-#else
-				while ((_read_reg(UartReg::LSR) & UartLSR::rx_ready) != 0)
-					(void)_read_reg(UartReg::RHR);
-#endif
-				_wr_idx = _rd_idx = 0;
-				_write_reg(UartReg::IER, UartIER::rx_en);
-				break;
-			default:
-				_lock.release();
-				return -1;
-		}
-		
-		_lock.release();
-		return 0;
-	}
-	
-	int UartManager::get_line_status()
-	{
-		uint8 lsr = read_lsr();
-		int status = 0;
-		
-		// 检查发送器是否为空 (THR empty 和 TSR empty)
-		if (lsr & UartLSR::tx_idle) {
-			status |= 0x01; // TIOCSER_TEMT - 发送器物理为空
-		}
-		
-		return status;
-	}
-};
+        // 硬件 FIFO 只在 UART 锁内消费；Console 回显可能重新进入发送路径，
+        // 因而必须释放 UART 锁后再进入行规程，避免 UART -> Console -> UART。
+        kConsole.console_intr(character);
+    }
+    return 0;
+}
+
+int UartManager::get_input_buffer_size()
+{
+    // try_getc 对 SBI 等传输是破坏性读取，read_ready 会把结果保存到预读槽。
+    return read_ready() ? 1 : 0;
+}
+
+int UartManager::get_output_buffer_size()
+{
+    _lock.acquire();
+    const int buffered = static_cast<int>(_write_index - _read_index);
+    _lock.release();
+    return buffered;
+}
+
+int UartManager::flush_buffer(int queue)
+{
+    _lock.acquire();
+    switch (queue)
+    {
+    case 0: // TCIFLUSH
+        _pending_input_valid = false;
+        platform::console_backend::flush_input();
+        break;
+    case 1: // TCOFLUSH
+        _write_index = _read_index = 0;
+        platform::console_backend::set_transmit_interrupt_enabled(false);
+        platform::console_backend::flush_output();
+        break;
+    case 2: // TCIOFLUSH
+        _pending_input_valid = false;
+        _write_index = _read_index = 0;
+        platform::console_backend::set_transmit_interrupt_enabled(false);
+        platform::console_backend::flush_input();
+        platform::console_backend::flush_output();
+        break;
+    default:
+        _lock.release();
+        return -1;
+    }
+    _lock.release();
+    return 0;
+}
+
+int UartManager::get_line_status()
+{
+    _lock.acquire();
+    const platform::console_backend::LineStatus status =
+        platform::console_backend::line_status();
+    const bool software_queue_empty = _write_index == _read_index;
+    _lock.release();
+
+    report_line_errors(status);
+    // TIOCSER_TEMT 只有在软件队列和物理移位寄存器都为空时才成立。
+    return software_queue_empty && status.transmitter_empty ? 0x01 : 0;
+}
+} // namespace dev

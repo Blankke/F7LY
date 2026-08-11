@@ -2,7 +2,7 @@
 #include "types.hh"
 #include "spinlock.hh"
 #include "param.h"
-#include "platform.hh"
+#include "hal/arch.hh"
 #include "proc/proc.hh"
 
 // 如果项目中没有bool类型，则定义它

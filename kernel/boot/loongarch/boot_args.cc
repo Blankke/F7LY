@@ -1,6 +1,7 @@
 #include "boot_args.hh"
 
 #include "hal/loongarch/platform_board.hh"
+#include "platform/profile.hh"
 
 namespace loongarch::boot
 {
@@ -10,6 +11,10 @@ namespace
     constexpr uint64 k_uhi_fdt_arg0 = ~1ULL;
     constexpr uint64 k_max_uboot_args = 16;
     constexpr uint64 k_max_uboot_arg_length = 32;
+    // LoongArch QEMU virt 的板级 ABI 把生成的 FDT 放在固定物理地址，
+    // 但 direct -kernel 不通过 a0-a3 传递该地址。只在 QEMU 画像中使用，
+    // 并且仍校验 FDT magic；真实开发板绝不静默猜测地址。
+    constexpr uint64 k_qemu_virt_fdt_paddr = 0x00100000;
 
     constexpr uint32 byte_swap32(uint32 value)
     {
@@ -141,6 +146,11 @@ uint64 resolve_dtb(uint64 arg0, uint64 arg1, uint64 arg2, uint64 arg3)
     if (is_fdt(arg1))
     {
         return board::physical_address(arg1);
+    }
+    if (platform::current_profile().machine == platform::Machine::QemuVirt &&
+        is_fdt(k_qemu_virt_fdt_paddr))
+    {
+        return k_qemu_virt_fdt_paddr;
     }
     if (arg0 == k_uhi_fdt_arg0)
     {

@@ -23,19 +23,47 @@ namespace __cxxabiv1
 
 		int __cxa_guard_acquire( __guard * g )
 		{
-			Info( "cxa guard acquire" );
-			return !*( char * ) ( g );
+			// Itanium ABI 要求 guard 的首字节在初始化完成后非零。用第二字节
+			// 表示“正在构造”，可让多个 CPU 竞争函数内 static 时只有一个
+			// 执行构造函数，其余等待 release/abort，而不是同时写同一对象。
+			constexpr uint64 guard_ready = 1;
+			constexpr uint64 guard_running = 1ULL << 8;
+			auto *state = reinterpret_cast<uint64 *>( g );
+
+			for ( ;; )
+			{
+				uint64 observed = __atomic_load_n( state, __ATOMIC_ACQUIRE );
+				if ( observed & guard_ready )
+				{
+					return 0;
+				}
+				if ( observed == 0 )
+				{
+					uint64 expected = 0;
+					if ( __atomic_compare_exchange_n( state, &expected,
+							guard_running, false, __ATOMIC_ACQ_REL,
+							__ATOMIC_ACQUIRE ) )
+					{
+						return 1;
+					}
+					continue;
+				}
+				asm volatile( "" ::: "memory" );
+			}
 		}
 
 		void __cxa_guard_release( __guard *g )
 		{
-			Info( "cxa guard release" );
-			*( char * ) g = 1;
+			__atomic_store_n( reinterpret_cast<uint64 *>( g ), 1ULL,
+				__ATOMIC_RELEASE );
 		}
 
-		void __cxa_guard_abort( __guard * )
+		void __cxa_guard_abort( __guard *g )
 		{
-			panic( "cxa guard abort" );
+			// 本项目禁用异常，但保留 ABI 正确的回滚语义；若未来构造路径
+			// 显式调用 abort，其他 CPU 可以重新竞争初始化权。
+			__atomic_store_n( reinterpret_cast<uint64 *>( g ), 0ULL,
+				__ATOMIC_RELEASE );
 		}
 
 /* **************** cxa at_exit **************** */
@@ -48,8 +76,10 @@ namespace __cxxabiv1
 
 		void __init_atexit_func_entry( void )
 		{
-			__atexit_func_entry_busy_list._next_entry = nullptr;
-			__atexit_func_entry_busy_list._prev_entry = nullptr;
+			// 空闲链表和已登记链表都使用循环哨兵。此前 busy 链表以 nullptr
+			// 初始化，__cxa_finalize() 会在空表上直接解引用空指针。
+			__atexit_func_entry_busy_list._next_entry = &__atexit_func_entry_busy_list;
+			__atexit_func_entry_busy_list._prev_entry = &__atexit_func_entry_busy_list;
 
 			__atexit_func_entry_free_list._next_entry = &__atexit_func_entry_free_list;
 			__atexit_func_entry_free_list._prev_entry = &__atexit_func_entry_free_list;
@@ -87,6 +117,7 @@ namespace __cxxabiv1
 			entry->destructor_func = f;
 			entry->obj_ptr = objptr;
 			entry->__dso_handle = dso;
+			__insert_atexit_func_entry_list( &__atexit_func_entry_busy_list, entry );
 			__atexit_func_count++;
 			return 0;
 		};

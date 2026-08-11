@@ -1,4 +1,5 @@
 #include "syscall_handler.hh"
+#include "libs/algorithm.hh"
 #include "syscall_abi.hh"
 #include "sysio.hh"
 #include "devs/console_termios.hh"
@@ -79,17 +80,11 @@
 #include "EASTL/vector.h"
 #include "interrupt_stats.hh"
 #include "mem/memlayout.hh"
+#include "mem/kernel_image.hh"
 namespace syscall
 {
     namespace
     {
-#ifdef RISCV
-        constexpr uint64 k_min_kernel_file_ptr = KERNBASE;
-        constexpr uint64 k_min_user_pagetable_base = KERNBASE;
-#elif defined(LOONGARCH)
-        constexpr uint64 k_min_kernel_file_ptr = PHYSBASE;
-        constexpr uint64 k_min_user_pagetable_base = PHYSBASE;
-#endif
         static int read_symlink_target_by_path(const eastl::string &path, eastl::string &target_path)
         {
             fs::vfile_tree_node *virtual_node = fs::k_vfs.get_virtual_node(path);
@@ -3456,7 +3451,7 @@ namespace syscall
 
         inline bool is_kernel_mapped_file_range(uint64 addr, uint64 size)
         {
-            if (addr < k_min_kernel_file_ptr || size == 0)
+            if (addr < mem::kernel_image_start_address() || size == 0)
             {
                 return false;
             }
@@ -3474,7 +3469,7 @@ namespace syscall
         inline bool is_sane_user_pagetable_base(uint64 base)
         {
             return base != 0 && is_page_align(base) &&
-                   base >= k_min_user_pagetable_base &&
+                   base >= mem::kernel_image_start_address() &&
                    mem::k_pmm.is_managed_page(reinterpret_cast<void *>(base));
         }
 
@@ -19084,8 +19079,8 @@ namespace syscall
             found_mapping = true;
             const uint64 vma_start = vm.addr;
             const uint64 vma_end = vma_start + static_cast<uint64>(vm.len);
-            const uint64 overlap_start = MAX(sync_start, vma_start);
-            const uint64 overlap_end = MIN(sync_end, vma_end);
+            const uint64 overlap_start = util::max(sync_start, vma_start);
+            const uint64 overlap_end = util::min(sync_end, vma_end);
             if ((vm.flags & MAP_SHARED) == 0 || vm.vfile == nullptr)
             {
                 return true;
@@ -19114,8 +19109,8 @@ namespace syscall
                         continue;
                     }
 
-                    const uint64 data_start = MAX(page_va, overlap_start);
-                    uint64 data_end = MIN(page_va + PGSIZE, overlap_end);
+                    const uint64 data_start = util::max(page_va, overlap_start);
+                    uint64 data_end = util::min(page_va + PGSIZE, overlap_end);
                     uint64 file_offset =
                         static_cast<uint64>(vm.offset) + (data_start - vma_start);
                     if (file_offset >= st.size)
@@ -19181,8 +19176,8 @@ namespace syscall
                     continue;
                 }
 
-                const uint64 data_start = MAX(page_va, overlap_start);
-                uint64 data_end = MIN(page_va + PGSIZE, overlap_end);
+                const uint64 data_start = util::max(page_va, overlap_start);
+                uint64 data_end = util::min(page_va + PGSIZE, overlap_end);
                 uint64 file_offset =
                     static_cast<uint64>(vm.offset) + (data_start - vma_start);
                 if (file_offset >= st.size)

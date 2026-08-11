@@ -1,7 +1,7 @@
 #include "dtb.hh"
 #include "libs/klib.hh"
 #include "printer.hh"
-#include "platform.hh"
+#include "platform/memory.hh"
 
 uint64 DtbManager::_dtb_addr = 0;
 uint64 k_dtb_addr = 0;
@@ -32,19 +32,13 @@ namespace
 {
     constexpr uint64 k_max_fdt_size = 16ULL * 1024 * 1024;
 
-    // LoongArch 下 QEMU 传进来的 DTB 地址是物理地址；内核后续既可能在启用分页前访问，
-    // 也可能在启用分页后再次解析 DTB。为了让这两种时机都能稳定访问，
-    // 这里统一把 DTB 规范化为 DMWIN 直映地址保存到 _dtb_addr；
-    // k_dtb_addr 仍继续保留物理地址，给页表映射等场景使用。
+    // _dtb_addr 始终保存“当前平台早期内核可直接访问”的地址；k_dtb_addr
+    // 则保存物理坐标，供 PMM 排除 DTB 页面。地址别名规则只由平台实现。
     static uint64 normalize_dtb_addr_for_kernel(uint64 dtb_addr)
     {
-#ifdef LOONGARCH
-        if (dtb_addr != 0 && (dtb_addr & VIRT_DMWIN_MASK) == 0)
-        {
-            return dtb_addr | DMWIN_MASK;
-        }
-#endif
-        return dtb_addr;
+        return dtb_addr == 0
+                   ? 0
+                   : platform::memory::kernel_access_address(dtb_addr);
     }
 
     struct FdtCursor
@@ -389,6 +383,185 @@ namespace
 
         addr = value;
         return true;
+    }
+
+    constexpr int k_max_address_translation_depth = 32;
+
+    // FDT 的 reg 使用父节点声明的单元宽度，而 ranges 使用“当前总线的
+    // child address + 父总线的 parent address + 当前总线的 size”。这里
+    // 只保存仍在遍历路径上的节点，因此不需要堆内存，也不会缓存失效指针。
+    struct FdtAddressFrame
+    {
+        uint32 child_address_cells = 2;
+        uint32 child_size_cells = 1;
+        bool cell_layout_valid = true;
+
+        bool ranges_present = false;
+        const uint8 *ranges = nullptr;
+        uint32 ranges_length = 0;
+
+        const uint8 *reg = nullptr;
+        uint32 reg_length = 0;
+        bool enabled = true;
+
+        bool mac_valid = false;
+        bool mac_is_local = false;
+        uint8 mac[6]{};
+
+        bool interrupt_controller = false;
+        const uint8 *interrupts_extended = nullptr;
+        uint32 interrupts_extended_length = 0;
+    };
+
+    struct FdtCpuInterruptController
+    {
+        uint32 phandle = 0;
+        uint32 interrupt_cells = 0;
+        uint64 hartid = 0;
+        bool cpu_enabled = false;
+    };
+
+    constexpr int k_max_cpu_interrupt_controllers = 32;
+
+    enum class FdtAddressResult
+    {
+        success,
+        no_mapping,
+        malformed,
+        unsupported,
+    };
+
+    static bool valid_mac_property(const uint8 *value, uint32 length,
+                                   uint8 mac[6])
+    {
+        if (value == nullptr || length != 6)
+        {
+            return false;
+        }
+
+        memmove(mac, value, 6);
+        if (mac[0] == 0xff || (mac[0] & 1U) != 0)
+        {
+            return false;
+        }
+        for (uint32 index = 0; index < 6; ++index)
+        {
+            if (mac[index] != 0)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    static bool fdt_status_is_enabled(const uint8 *value, uint32 length)
+    {
+        // status 是字符串属性；只接受规范的 "ok"/"okay"，避免把诸如
+        // "okra" 的损坏值按前两个字符误判成已启用。
+        return (length == 3 && memcmp(value, "ok\0", 3) == 0) ||
+               (length == 5 && memcmp(value, "okay\0", 5) == 0);
+    }
+
+    static FdtAddressResult translate_through_bus(
+        const FdtAddressFrame &bus, const FdtAddressFrame &parent,
+        uint64 child_address, uint64 &parent_address)
+    {
+        if (!bus.cell_layout_valid || !parent.cell_layout_valid)
+        {
+            return FdtAddressResult::malformed;
+        }
+        if (bus.child_address_cells == 0 || bus.child_address_cells > 2 ||
+            parent.child_address_cells == 0 || parent.child_address_cells > 2 ||
+            bus.child_size_cells > 2)
+        {
+            // uint64 无法忠实表达 PCI 等三单元、带空间标志的地址。静默截断
+            // 会匹配到错误设备，因此由上层明确放弃这个候选节点。
+            return FdtAddressResult::unsupported;
+        }
+        if (!bus.ranges_present)
+        {
+            // 缺少 ranges 表示该总线没有声明到父地址域的映射；它不同于
+            // 长度为零的 ranges，后者才表示恒等映射。
+            return FdtAddressResult::no_mapping;
+        }
+        if (bus.ranges_length == 0)
+        {
+            parent_address = child_address;
+            return FdtAddressResult::success;
+        }
+        if (bus.child_size_cells == 0 || (bus.ranges_length & 3U) != 0)
+        {
+            return FdtAddressResult::malformed;
+        }
+
+        const uint32 entry_cells = bus.child_address_cells +
+                                   parent.child_address_cells +
+                                   bus.child_size_cells;
+        const uint32 entry_bytes = entry_cells * sizeof(uint32);
+        if (entry_cells == 0 || bus.ranges_length % entry_bytes != 0)
+        {
+            return FdtAddressResult::malformed;
+        }
+
+        for (uint32 offset = 0; offset < bus.ranges_length; offset += entry_bytes)
+        {
+            const uint8 *entry = bus.ranges + offset;
+            uint64 child_base = 0;
+            uint64 parent_base = 0;
+            uint64 size = 0;
+            if (!read_fdt_cells(entry, static_cast<int>(bus.child_address_cells),
+                                child_base) ||
+                !read_fdt_cells(entry + bus.child_address_cells * sizeof(uint32),
+                                static_cast<int>(parent.child_address_cells),
+                                parent_base) ||
+                !read_fdt_cells(
+                    entry + (bus.child_address_cells + parent.child_address_cells) *
+                                sizeof(uint32),
+                    static_cast<int>(bus.child_size_cells), size))
+            {
+                return FdtAddressResult::malformed;
+            }
+
+            if (size == 0 || child_address < child_base)
+            {
+                continue;
+            }
+            const uint64 delta = child_address - child_base;
+            if (delta >= size)
+            {
+                continue;
+            }
+            if (parent_base > ~0ULL - delta)
+            {
+                return FdtAddressResult::malformed;
+            }
+            parent_address = parent_base + delta;
+            return FdtAddressResult::success;
+        }
+        return FdtAddressResult::no_mapping;
+    }
+
+    static FdtAddressResult translate_reg_address(
+        const FdtAddressFrame frames[k_max_address_translation_depth],
+        int node_depth, uint64 child_address, uint64 &physical_address)
+    {
+        uint64 translated = child_address;
+        // 深度 0 是根节点；直接位于根下的设备已经使用根物理地址域。从
+        // 设备父总线开始逐级应用 ranges，直到抵达根地址域。
+        for (int bus_depth = node_depth - 1; bus_depth > 0; --bus_depth)
+        {
+            uint64 parent_address = 0;
+            const FdtAddressResult result = translate_through_bus(
+                frames[bus_depth], frames[bus_depth - 1], translated,
+                parent_address);
+            if (result != FdtAddressResult::success)
+            {
+                return result;
+            }
+            translated = parent_address;
+        }
+        physical_address = translated;
+        return FdtAddressResult::success;
     }
 } // namespace
 
@@ -858,6 +1031,528 @@ int DtbManager::get_cpu_hartids(uint64 *hartids, int max_harts)
     return walker.valid() ? found : 0;
 }
 
+bool DtbManager::get_timebase_frequency(uint64 &frequency_hz)
+{
+    frequency_hz = 0;
+
+    FdtCursor cursor{};
+    if (!load_fdt_cursor(_dtb_addr, cursor))
+    {
+        return false;
+    }
+
+    int cpus_depth = -1;
+    bool property_found = false;
+    bool property_valid = true;
+    FdtWalker walker(cursor);
+    FdtEvent event{};
+    while (walker.next(event))
+    {
+        if (event.type == FdtEventType::begin_node && event.depth == 1 &&
+            strcmp(event.name, "cpus") == 0)
+        {
+            cpus_depth = event.depth;
+            continue;
+        }
+        if (event.type == FdtEventType::end_node && event.depth == cpus_depth)
+        {
+            cpus_depth = -1;
+            continue;
+        }
+        if (event.type != FdtEventType::property || event.depth != cpus_depth ||
+            strcmp(event.property, "timebase-frequency") != 0)
+        {
+            continue;
+        }
+
+        // Devicetree 的 timebase-frequency 是单个 u32。重复属性或私自扩展为
+        // 其它宽度都不能静默截断，否则定时器换算会整体漂移。
+        if (property_found || event.length != sizeof(uint32))
+        {
+            property_valid = false;
+            continue;
+        }
+        property_found = true;
+        frequency_hz = read_be32(event.value);
+        property_valid = frequency_hz != 0;
+    }
+
+    return walker.valid() && property_found && property_valid;
+}
+
+int DtbManager::get_riscv_plic_contexts(uint64 plic_address,
+                                         DtbRiscvPlicContext *contexts,
+                                         int max_contexts)
+{
+    if (contexts == nullptr || max_contexts <= 0)
+    {
+        return 0;
+    }
+
+    FdtCursor cursor{};
+    if (!load_fdt_cursor(_dtb_addr, cursor))
+    {
+        return 0;
+    }
+
+    // 第一遍只建立 CPU interrupt-controller phandle -> hartid 表。PLIC 的
+    // interrupts-extended 可以混排 M/S context，只有借助这张表才能知道每个
+    // 元组实际属于哪个 hart，不能从元组序号反推。
+    FdtCpuInterruptController controllers[k_max_cpu_interrupt_controllers]{};
+    int controller_count = 0;
+    bool controller_table_valid = true;
+
+    int cpus_depth = -1;
+    int cpus_address_cells = 1;
+    int cpu_depth = -1;
+    bool cpu_name_matches = false;
+    bool cpu_device_type_matches = false;
+    bool cpu_enabled = true;
+    const uint8 *cpu_reg = nullptr;
+    uint32 cpu_reg_length = 0;
+
+    int interrupt_controller_depth = -1;
+    bool interrupt_controller_marker = false;
+    bool interrupt_controller_valid = true;
+    bool interrupt_controller_phandle_seen = false;
+    uint32 interrupt_controller_phandle = 0;
+    bool interrupt_cells_seen = false;
+    uint32 interrupt_cells = 0;
+
+    bool cpu_controller_seen = false;
+    bool cpu_controller_valid = true;
+    uint32 cpu_controller_phandle = 0;
+    uint32 cpu_controller_cells = 0;
+
+    auto finish_interrupt_controller = [&]() {
+        if (!interrupt_controller_marker)
+        {
+            return;
+        }
+        const bool complete = interrupt_controller_valid &&
+                              interrupt_controller_phandle_seen &&
+                              interrupt_controller_phandle != 0 &&
+                              interrupt_cells_seen && interrupt_cells != 0;
+        if (cpu_controller_seen)
+        {
+            // 一个 CPU 节点出现多个 interrupt-controller 时无法确定 PLIC
+            // phandle 应关联到哪一个，宁可使整张映射失效。
+            cpu_controller_valid = false;
+            return;
+        }
+        cpu_controller_seen = true;
+        cpu_controller_valid = complete;
+        cpu_controller_phandle = interrupt_controller_phandle;
+        cpu_controller_cells = interrupt_cells;
+    };
+
+    auto finish_cpu = [&]() {
+        if ((!cpu_name_matches && !cpu_device_type_matches) ||
+            cpu_reg == nullptr || cpus_address_cells <= 0 ||
+            cpus_address_cells > 2 ||
+            cpu_reg_length < static_cast<uint32>(cpus_address_cells * 4) ||
+            !cpu_controller_seen || !cpu_controller_valid)
+        {
+            return;
+        }
+
+        uint64 hartid = 0;
+        if (!read_fdt_cells(cpu_reg, cpus_address_cells, hartid))
+        {
+            controller_table_valid = false;
+            return;
+        }
+        for (int index = 0; index < controller_count; ++index)
+        {
+            if (controllers[index].phandle == cpu_controller_phandle)
+            {
+                controller_table_valid = false;
+                return;
+            }
+        }
+        if (controller_count >= k_max_cpu_interrupt_controllers)
+        {
+            controller_table_valid = false;
+            return;
+        }
+        controllers[controller_count++] = {
+            .phandle = cpu_controller_phandle,
+            .interrupt_cells = cpu_controller_cells,
+            .hartid = hartid,
+            .cpu_enabled = cpu_enabled,
+        };
+    };
+
+    FdtWalker cpu_walker(cursor);
+    FdtEvent event{};
+    while (cpu_walker.next(event))
+    {
+        if (event.type == FdtEventType::begin_node)
+        {
+            if (event.depth == 1 && strcmp(event.name, "cpus") == 0)
+            {
+                cpus_depth = event.depth;
+                cpus_address_cells = 1;
+            }
+            else if (cpus_depth >= 0 && event.depth == cpus_depth + 1)
+            {
+                cpu_depth = event.depth;
+                cpu_name_matches = strncmp(event.name, "cpu@", 4) == 0;
+                cpu_device_type_matches = false;
+                cpu_enabled = true;
+                cpu_reg = nullptr;
+                cpu_reg_length = 0;
+                cpu_controller_seen = false;
+                cpu_controller_valid = true;
+                cpu_controller_phandle = 0;
+                cpu_controller_cells = 0;
+            }
+            else if (cpu_depth >= 0 && event.depth == cpu_depth + 1)
+            {
+                interrupt_controller_depth = event.depth;
+                interrupt_controller_marker = false;
+                interrupt_controller_valid = true;
+                interrupt_controller_phandle_seen = false;
+                interrupt_controller_phandle = 0;
+                interrupt_cells_seen = false;
+                interrupt_cells = 0;
+            }
+            continue;
+        }
+        if (event.type == FdtEventType::end_node)
+        {
+            if (event.depth == interrupt_controller_depth)
+            {
+                finish_interrupt_controller();
+                interrupt_controller_depth = -1;
+            }
+            if (event.depth == cpu_depth)
+            {
+                finish_cpu();
+                cpu_depth = -1;
+            }
+            if (event.depth == cpus_depth)
+            {
+                cpus_depth = -1;
+            }
+            continue;
+        }
+
+        if (event.depth == cpus_depth &&
+            strcmp(event.property, "#address-cells") == 0)
+        {
+            if (event.length == sizeof(uint32))
+            {
+                cpus_address_cells = static_cast<int>(read_be32(event.value));
+            }
+            else
+            {
+                controller_table_valid = false;
+            }
+            continue;
+        }
+        if (event.depth == cpu_depth)
+        {
+            if (strcmp(event.property, "device_type") == 0)
+            {
+                cpu_device_type_matches = event.length >= 3 &&
+                                          memcmp(event.value, "cpu", 3) == 0;
+            }
+            else if (strcmp(event.property, "status") == 0)
+            {
+                cpu_enabled = fdt_status_is_enabled(event.value, event.length);
+            }
+            else if (strcmp(event.property, "reg") == 0)
+            {
+                cpu_reg = event.value;
+                cpu_reg_length = event.length;
+            }
+            continue;
+        }
+        if (event.depth != interrupt_controller_depth)
+        {
+            continue;
+        }
+
+        if (strcmp(event.property, "interrupt-controller") == 0)
+        {
+            interrupt_controller_marker = true;
+            interrupt_controller_valid = interrupt_controller_valid &&
+                                         event.length == 0;
+        }
+        else if (strcmp(event.property, "#interrupt-cells") == 0)
+        {
+            if (interrupt_cells_seen || event.length != sizeof(uint32))
+            {
+                interrupt_controller_valid = false;
+            }
+            else
+            {
+                interrupt_cells_seen = true;
+                interrupt_cells = read_be32(event.value);
+            }
+        }
+        else if (strcmp(event.property, "phandle") == 0 ||
+                 strcmp(event.property, "linux,phandle") == 0)
+        {
+            if (event.length != sizeof(uint32))
+            {
+                interrupt_controller_valid = false;
+            }
+            else
+            {
+                const uint32 phandle = read_be32(event.value);
+                if (interrupt_controller_phandle_seen &&
+                    interrupt_controller_phandle != phandle)
+                {
+                    interrupt_controller_valid = false;
+                }
+                interrupt_controller_phandle_seen = true;
+                interrupt_controller_phandle = phandle;
+            }
+        }
+    }
+
+    if (!cpu_walker.valid() || !controller_table_valid || controller_count == 0)
+    {
+        boardPrintfError("[DTB] invalid CPU interrupt-controller phandle table\n");
+        return 0;
+    }
+
+    // 第二遍按 reg+ranges 的物理坐标准确定位当前画像指定的 PLIC；只看节点名
+    // 或 unit-address 会在存在桥接 ranges 时绑定到错误控制器。
+    FdtAddressFrame frames[k_max_address_translation_depth]{};
+    bool depth_overflow = false;
+    bool plic_found = false;
+    bool plic_ambiguous = false;
+    bool plic_candidate_malformed = false;
+    const uint8 *interrupts_extended = nullptr;
+    uint32 interrupts_extended_length = 0;
+
+    auto inspect_plic_candidate = [&](int depth) {
+        FdtAddressFrame &node = frames[depth];
+        if (!node.enabled || !node.interrupt_controller || node.reg == nullptr ||
+            depth <= 0)
+        {
+            return;
+        }
+
+        const FdtAddressFrame &parent = frames[depth - 1];
+        const uint32 entry_cells = parent.child_address_cells +
+                                   parent.child_size_cells;
+        const uint32 entry_bytes = entry_cells * sizeof(uint32);
+        if (!node.cell_layout_valid || !parent.cell_layout_valid ||
+            parent.child_address_cells == 0 ||
+            parent.child_address_cells > 2 || parent.child_size_cells > 2 ||
+            entry_cells == 0 || (node.reg_length & 3U) != 0 ||
+            node.reg_length < entry_bytes || node.reg_length % entry_bytes != 0)
+        {
+            plic_candidate_malformed = true;
+            return;
+        }
+
+        for (uint32 offset = 0; offset < node.reg_length; offset += entry_bytes)
+        {
+            uint64 bus_address = 0;
+            if (!read_fdt_cells(node.reg + offset,
+                                static_cast<int>(parent.child_address_cells),
+                                bus_address))
+            {
+                plic_candidate_malformed = true;
+                return;
+            }
+            uint64 physical_address = 0;
+            const FdtAddressResult translation = translate_reg_address(
+                frames, depth, bus_address, physical_address);
+            if (translation == FdtAddressResult::malformed ||
+                translation == FdtAddressResult::unsupported)
+            {
+                plic_candidate_malformed = true;
+                continue;
+            }
+            if (translation != FdtAddressResult::success ||
+                physical_address != plic_address)
+            {
+                continue;
+            }
+            if (plic_found)
+            {
+                plic_ambiguous = true;
+                continue;
+            }
+            plic_found = true;
+            interrupts_extended = node.interrupts_extended;
+            interrupts_extended_length = node.interrupts_extended_length;
+        }
+    };
+
+    FdtWalker plic_walker(cursor);
+    while (plic_walker.next(event))
+    {
+        if (event.type == FdtEventType::begin_node)
+        {
+            if (event.depth >= k_max_address_translation_depth)
+            {
+                depth_overflow = true;
+                continue;
+            }
+            frames[event.depth] = {};
+            frames[event.depth].enabled =
+                event.depth == 0 || frames[event.depth - 1].enabled;
+            continue;
+        }
+        if (event.type == FdtEventType::end_node)
+        {
+            if (event.depth < k_max_address_translation_depth)
+            {
+                inspect_plic_candidate(event.depth);
+            }
+            continue;
+        }
+        if (event.depth >= k_max_address_translation_depth)
+        {
+            continue;
+        }
+
+        FdtAddressFrame &node = frames[event.depth];
+        if (strcmp(event.property, "#address-cells") == 0)
+        {
+            if (event.length != sizeof(uint32))
+            {
+                node.cell_layout_valid = false;
+            }
+            else
+            {
+                node.child_address_cells = read_be32(event.value);
+            }
+        }
+        else if (strcmp(event.property, "#size-cells") == 0)
+        {
+            if (event.length != sizeof(uint32))
+            {
+                node.cell_layout_valid = false;
+            }
+            else
+            {
+                node.child_size_cells = read_be32(event.value);
+            }
+        }
+        else if (strcmp(event.property, "ranges") == 0)
+        {
+            if (node.ranges_present)
+            {
+                node.cell_layout_valid = false;
+            }
+            node.ranges_present = true;
+            node.ranges = event.value;
+            node.ranges_length = event.length;
+        }
+        else if (strcmp(event.property, "reg") == 0)
+        {
+            if (node.reg != nullptr)
+            {
+                node.cell_layout_valid = false;
+            }
+            node.reg = event.value;
+            node.reg_length = event.length;
+        }
+        else if (strcmp(event.property, "status") == 0)
+        {
+            node.enabled = node.enabled &&
+                           fdt_status_is_enabled(event.value, event.length);
+        }
+        else if (strcmp(event.property, "interrupt-controller") == 0)
+        {
+            node.interrupt_controller = event.length == 0;
+            node.cell_layout_valid = node.cell_layout_valid && event.length == 0;
+        }
+        else if (strcmp(event.property, "interrupts-extended") == 0)
+        {
+            if (node.interrupts_extended != nullptr)
+            {
+                node.cell_layout_valid = false;
+            }
+            node.interrupts_extended = event.value;
+            node.interrupts_extended_length = event.length;
+        }
+    }
+
+    if (!plic_walker.valid() || depth_overflow || plic_ambiguous || !plic_found ||
+        plic_candidate_malformed || interrupts_extended == nullptr ||
+        interrupts_extended_length == 0 ||
+        (interrupts_extended_length & 3U) != 0)
+    {
+        boardPrintfError("[DTB] PLIC reg/interrupts-extended is missing or malformed\n");
+        return 0;
+    }
+
+    int context_count = 0;
+    uint32 byte_offset = 0;
+    uint32 raw_context = 0;
+    while (byte_offset < interrupts_extended_length)
+    {
+        if (interrupts_extended_length - byte_offset < sizeof(uint32))
+        {
+            return 0;
+        }
+        const uint32 phandle = read_be32(interrupts_extended + byte_offset);
+        const FdtCpuInterruptController *controller = nullptr;
+        for (int index = 0; index < controller_count; ++index)
+        {
+            if (controllers[index].phandle == phandle)
+            {
+                controller = &controllers[index];
+                break;
+            }
+        }
+        // RISC-V CPU interrupt-controller 必须使用单个 interrupt cause cell。
+        // 若 phandle 未知，就连下一个元组从哪里开始都无法确定，必须整体失败。
+        if (controller == nullptr || controller->interrupt_cells != 1)
+        {
+            boardPrintfError("[DTB] PLIC references unknown/unsupported interrupt controller phandle=%u\n",
+                             phandle);
+            return 0;
+        }
+
+        const uint32 tuple_bytes =
+            (1U + controller->interrupt_cells) * sizeof(uint32);
+        if (tuple_bytes > interrupts_extended_length - byte_offset)
+        {
+            boardPrintfError("[DTB] truncated PLIC interrupts-extended tuple\n");
+            return 0;
+        }
+        const uint32 interrupt_cause =
+            read_be32(interrupts_extended + byte_offset + sizeof(uint32));
+        if (interrupt_cause == 9 && controller->cpu_enabled)
+        {
+            for (int index = 0; index < context_count; ++index)
+            {
+                if (contexts[index].hartid == controller->hartid)
+                {
+                    boardPrintfError("[DTB] duplicate S-mode PLIC context for hart=%lu\n",
+                                     controller->hartid);
+                    return 0;
+                }
+            }
+            if (context_count >= max_contexts)
+            {
+                boardPrintfError("[DTB] PLIC context table exceeds caller capacity=%d\n",
+                                 max_contexts);
+                return 0;
+            }
+            contexts[context_count++] = {
+                .hartid = controller->hartid,
+                .context_id = raw_context,
+            };
+        }
+
+        byte_offset += tuple_bytes;
+        ++raw_context;
+    }
+
+    return context_count;
+}
+
 bool DtbManager::get_mac_address(uint64 device_address, uint8 mac[6])
 {
     if (mac == nullptr)
@@ -871,11 +1566,87 @@ bool DtbManager::get_mac_address(uint64 device_address, uint8 mac[6])
         return false;
     }
 
-    int target_depth = -1;
-    bool target_enabled = true;
-    bool candidate_valid = false;
-    bool candidate_is_local = false;
-    uint8 candidate[6]{};
+    FdtAddressFrame frames[k_max_address_translation_depth]{};
+    bool depth_overflow = false;
+    bool malformed_candidate = false;
+    bool unsupported_candidate = false;
+    bool result_found = false;
+    bool result_ambiguous = false;
+    uint8 result_mac[6]{};
+
+    auto inspect_candidate = [&](int depth) {
+        FdtAddressFrame &node = frames[depth];
+        if (!node.enabled || !node.mac_valid || node.reg == nullptr || depth <= 0)
+        {
+            return;
+        }
+        if (!node.cell_layout_valid)
+        {
+            malformed_candidate = true;
+            return;
+        }
+
+        const FdtAddressFrame &parent = frames[depth - 1];
+        if (!parent.cell_layout_valid || parent.child_address_cells == 0 ||
+            parent.child_address_cells > 2 || parent.child_size_cells > 2)
+        {
+            unsupported_candidate = unsupported_candidate ||
+                                    parent.cell_layout_valid;
+            malformed_candidate = malformed_candidate ||
+                                  !parent.cell_layout_valid;
+            return;
+        }
+
+        const uint32 entry_cells = parent.child_address_cells +
+                                   parent.child_size_cells;
+        const uint32 entry_bytes = entry_cells * sizeof(uint32);
+        if (entry_cells == 0 || (node.reg_length & 3U) != 0 ||
+            node.reg_length < entry_bytes || node.reg_length % entry_bytes != 0)
+        {
+            malformed_candidate = true;
+            return;
+        }
+
+        for (uint32 offset = 0; offset < node.reg_length; offset += entry_bytes)
+        {
+            uint64 bus_address = 0;
+            if (!read_fdt_cells(node.reg + offset,
+                                static_cast<int>(parent.child_address_cells),
+                                bus_address))
+            {
+                malformed_candidate = true;
+                return;
+            }
+
+            uint64 physical_address = 0;
+            const FdtAddressResult translation = translate_reg_address(
+                frames, depth, bus_address, physical_address);
+            if (translation == FdtAddressResult::malformed)
+            {
+                malformed_candidate = true;
+                continue;
+            }
+            if (translation == FdtAddressResult::unsupported)
+            {
+                unsupported_candidate = true;
+                continue;
+            }
+            if (translation != FdtAddressResult::success ||
+                physical_address != device_address)
+            {
+                continue;
+            }
+
+            if (result_found)
+            {
+                // 两个节点映射到同一物理设备时无法确定哪个 MAC 才权威。
+                result_ambiguous = true;
+                continue;
+            }
+            memmove(result_mac, node.mac, sizeof(result_mac));
+            result_found = true;
+        }
+    };
 
     FdtWalker walker(cursor);
     FdtEvent event{};
@@ -883,61 +1654,128 @@ bool DtbManager::get_mac_address(uint64 device_address, uint8 mac[6])
     {
         if (event.type == FdtEventType::begin_node)
         {
-            uint64 unit_address = 0;
-            if (target_depth < 0 && parse_node_unit_address(event.name, unit_address) &&
-                unit_address == device_address)
+            if (event.depth >= k_max_address_translation_depth)
             {
-                target_depth = event.depth;
-                target_enabled = true;
-                candidate_valid = false;
-                candidate_is_local = false;
+                depth_overflow = true;
+                continue;
             }
+            frames[event.depth] = {};
+            frames[event.depth].enabled =
+                event.depth == 0 || frames[event.depth - 1].enabled;
             continue;
         }
         if (event.type == FdtEventType::end_node)
         {
-            if (target_depth == event.depth)
+            if (event.depth < k_max_address_translation_depth)
             {
-                if (target_enabled && candidate_valid)
-                {
-                    memmove(mac, candidate, sizeof(candidate));
-                    return true;
-                }
-                target_depth = -1;
+                inspect_candidate(event.depth);
             }
             continue;
         }
-        if (target_depth < 0 || event.depth != target_depth)
+        if (event.depth >= k_max_address_translation_depth)
         {
+            continue;
+        }
+
+        FdtAddressFrame &node = frames[event.depth];
+        if (strcmp(event.property, "#address-cells") == 0)
+        {
+            if (event.length != sizeof(uint32))
+            {
+                node.cell_layout_valid = false;
+            }
+            else
+            {
+                node.child_address_cells = read_be32(event.value);
+            }
+            continue;
+        }
+        if (strcmp(event.property, "#size-cells") == 0)
+        {
+            if (event.length != sizeof(uint32))
+            {
+                node.cell_layout_valid = false;
+            }
+            else
+            {
+                node.child_size_cells = read_be32(event.value);
+            }
+            continue;
+        }
+        if (strcmp(event.property, "ranges") == 0)
+        {
+            if (node.ranges_present)
+            {
+                node.cell_layout_valid = false;
+            }
+            node.ranges_present = true;
+            node.ranges = event.value;
+            node.ranges_length = event.length;
+            continue;
+        }
+        if (strcmp(event.property, "reg") == 0)
+        {
+            if (node.reg != nullptr)
+            {
+                node.cell_layout_valid = false;
+            }
+            node.reg = event.value;
+            node.reg_length = event.length;
             continue;
         }
         if (strcmp(event.property, "status") == 0)
         {
-            target_enabled = event.length >= 2 && memcmp(event.value, "ok", 2) == 0;
+            node.enabled = node.enabled &&
+                           fdt_status_is_enabled(event.value, event.length);
         }
-        else if (event.length >= sizeof(candidate) &&
-                 (strcmp(event.property, "local-mac-address") == 0 ||
-                  (!candidate_is_local && strcmp(event.property, "mac-address") == 0)))
+        else if (strcmp(event.property, "local-mac-address") == 0 ||
+                 strcmp(event.property, "mac-address") == 0)
         {
             uint8 property_mac[6]{};
-            memmove(property_mac, event.value, sizeof(property_mac));
-            bool property_valid = property_mac[0] != 0xff &&
-                                  (property_mac[0] & 1U) == 0;
-            bool any_nonzero = false;
-            for (uint32 index = 0; index < sizeof(property_mac); ++index)
+            const bool is_local =
+                strcmp(event.property, "local-mac-address") == 0;
+            if (valid_mac_property(event.value, event.length, property_mac) &&
+                (is_local || !node.mac_is_local))
             {
-                any_nonzero = any_nonzero || property_mac[index] != 0;
-            }
-            property_valid = property_valid && any_nonzero;
-            if (property_valid)
-            {
-                memmove(candidate, property_mac, sizeof(candidate));
-                candidate_valid = true;
-                candidate_is_local = strcmp(event.property, "local-mac-address") == 0;
+                memmove(node.mac, property_mac, sizeof(node.mac));
+                node.mac_valid = true;
+                node.mac_is_local = is_local;
             }
         }
     }
-    return false;
+
+    if (!walker.valid())
+    {
+        boardPrintfError("[DTB] MAC lookup stopped on malformed structure block\n");
+        return false;
+    }
+    if (depth_overflow)
+    {
+        boardPrintfError("[DTB] MAC lookup exceeds maximum node depth %d\n",
+                         k_max_address_translation_depth);
+        return false;
+    }
+    if (result_ambiguous)
+    {
+        boardPrintfError("[DTB] multiple MAC nodes map to physical 0x%lx\n",
+                         device_address);
+        return false;
+    }
+    if (!result_found && malformed_candidate)
+    {
+        boardPrintfError("[DTB] malformed reg/ranges while looking up MAC at 0x%lx\n",
+                         device_address);
+    }
+    else if (!result_found && unsupported_candidate)
+    {
+        boardPrintfError("[DTB] unsupported address-cell layout while looking up MAC at 0x%lx\n",
+                         device_address);
+    }
+    if (result_found)
+    {
+        memmove(mac, result_mac, sizeof(result_mac));
+    }
+    return result_found;
 }
 
 bool DtbManager::get_initrd(uint64& start, uint64& end) {
@@ -998,12 +1836,6 @@ bool DtbManager::get_initrd(uint64& start, uint64& end) {
 }
 
 void DtbManager::initialize_boot_dtb(uint64 dtb_addr) {
-    #ifdef LOONGARCH
-    uint64 conv_base = 0x9000000000000000UL;
-    #else
-    uint64 conv_base = 0; // RISC-V usually direct map or identical or handled by VMM
-    #endif
-
     auto check_dtb = [&](uint64 p, const char **failure_reason = nullptr) -> bool {
         if (failure_reason != nullptr)
         {
@@ -1026,7 +1858,8 @@ void DtbManager::initialize_boot_dtb(uint64 dtb_addr) {
             return false;
         }
         FdtCursor cursor{};
-        const uint64 kernel_address = p | conv_base;
+        const uint64 kernel_address =
+            platform::memory::kernel_access_address(p);
         if (!load_fdt_cursor(kernel_address, cursor, failure_reason))
         {
             return false;
@@ -1048,50 +1881,17 @@ void DtbManager::initialize_boot_dtb(uint64 dtb_addr) {
         boardPrintfInfo("[DTB] firmware address valid: 0x%lx\n", dtb_addr);
         final_dtb = dtb_addr;
     } else {
-#ifdef BOARD_LS2K1000
-        // 实机地址空间包含大量 MMIO 空洞，不能像 QEMU 一样盲扫前 256MiB。
-        // 固件参数中的 DTB 不完整时立即终止，避免在错误地址上继续解析内存。
-        panic("[DTB] invalid LS2K1000 firmware DTB: address=0x%lx reason=%s",
+        // DTB 是内存、CPU 与设备资源的权威输入。盲扫 RAM 既可能触碰 MMIO
+        // 空洞，也会把损坏的启动契约伪装成“偶尔能启动”，所有平台统一失败。
+        panic("[DTB] invalid firmware DTB: address=0x%lx reason=%s",
               dtb_addr,
               dtb_failure_reason != nullptr ? dtb_failure_reason : "unknown");
-#else
-        printfMagenta("[DTB] invalid firmware DTB at 0x%lx: %s; scanning RAM...\n",
-                      dtb_addr,
-                      dtb_failure_reason != nullptr ? dtb_failure_reason : "unknown");
-        // Scan 0 to 256MB
-        for (uint64 p = 0; p < 0x10000000; p += 0x1000) { // 4KB steps
-            if (check_dtb(p)) {
-                printfYellow("[DTB] Found FDT at Physical 0x%lx\n", p);
-                final_dtb = p;
-                break;
-            }
-        }
-        if (final_dtb == 0) {
-            printfMagenta("[DTB] FDT NOT FOUND in first 256MB of RAM! System may halt.\n");
-            // Try 0x200000 (standard load offset)?
-            if (check_dtb(0x200000)) { final_dtb = 0x200000; printfYellow("[DTB] Found at 0x200000\n"); }
-        }
-#endif
     }
 
-    if (final_dtb != 0) {
-#ifdef LOONGARCH
-        // 对外统一保存物理地址。U-Boot/固件既可能传物理地址，也可能传
-        // cached DMW 别名；若把后者直接交给 PMM，DTB 页面将无法从物理
-        // RAM 区间中排除，随后可能被页分配器覆盖。
-        k_dtb_addr = VIRT2PHY(final_dtb);
-#else
-        k_dtb_addr = final_dtb;
-#endif
-        DtbManager::init(k_dtb_addr);
-    } else {
-#ifdef LOONGARCH
-        k_dtb_addr = VIRT2PHY(dtb_addr);
-#else
-        k_dtb_addr = dtb_addr; // Fallback
-#endif
-        DtbManager::init(k_dtb_addr);
-    }
+    // 对外统一保存物理地址。固件可能传物理地址，也可能传平台直映别名；
+    // 若把别名交给 PMM，DTB 页面将无法从物理 RAM 区间中排除。
+    k_dtb_addr = platform::memory::physical_address(final_dtb);
+    DtbManager::init(k_dtb_addr);
 
     boardPrintfInfo("[DTB] blob ready: physical=0x%lx size=%lu bytes\n",
                     k_dtb_addr, DtbManager::get_dtb_size());
@@ -1113,9 +1913,5 @@ void DtbManager::initialize_boot_dtb(uint64 dtb_addr) {
     // 既无法可靠确定镜像边界，也可能误认内核数据；缺省路径统一使用主块设备。
     k_initrd_start = 0;
     k_initrd_end = 0;
-#ifdef BOARD_LS2K1000
-    boardPrintfInfo("[DTB] no initrd in DTB; root device=SATA\n");
-#else
-    boardPrintfInfo("[DTB] no initrd in DTB; root device=VirtIO\n");
-#endif
+    boardPrintfInfo("[DTB] no initrd in DTB; root source=platform block backend\n");
 }

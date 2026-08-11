@@ -1,4 +1,4 @@
-#include "platform.hh"
+#include "hal/arch.hh"
 #include "param.h"
 
 #include "spinlock.hh"

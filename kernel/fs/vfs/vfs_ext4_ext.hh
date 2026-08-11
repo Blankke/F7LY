@@ -63,7 +63,6 @@ int vfs_ext4_init(void);
 
 //fs operations
 int vfs_ext_mount(struct filesystem *fs, uint64_t rwflag, void *data);
-int vfs_ext_mount2(struct filesystem *fs, uint64_t rwflag, void *data);
 int vfs_ext_umount(struct filesystem *fs);
 int vfs_ext_fstat(struct file *f, struct kstat *st);
 int vfs_ext_flush(struct filesystem *fs);

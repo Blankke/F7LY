@@ -3,7 +3,7 @@
  * @brief 地址空间级用户 ASID 生命周期管理。
  *
  * 使用示例：
- *   make build ARCH=riscv
+ *   make build PROFILE=riscv-qemu
  *
  * ASID 随 ProcessMemoryManager 创建和销毁；CLONE_VM 只增加 mm 引用，不重新
  * 分配 ASID。耗尽时仍保留一次全核失效作为回收屏障，但正常 mmap/mprotect/

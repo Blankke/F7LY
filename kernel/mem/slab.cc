@@ -1,5 +1,5 @@
 #include "slab.hh"
-#include "platform.hh"
+#include "hal/arch.hh"
 #include "physical_memory_manager.hh"
 #include "printer.hh"
 #include "global_operator.hh"

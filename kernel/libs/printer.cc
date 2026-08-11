@@ -1,9 +1,7 @@
 #include "printer.hh"
 #include <stdarg.h>
 
-#ifdef RISCV
-#include "../hal/riscv/sbi.hh"
-#endif
+#include "platform/power.hh"
 
 // 全局打印器实例
 Printer k_printer;
@@ -228,16 +226,7 @@ void log_with_prefix(const char *color, bool enabled, const char *tag, const cha
 
 	k_printer.set_panicked(); // freeze uart output from other CPUs
 
-#ifdef RISCV
-	sbi_shutdown();
-#elif defined(LOONGARCH)
-#ifndef BOARD_LS2K1000
-	*(volatile uint8 *)(0x8000000000000000 | 0x100E001C) = 0x34;
-#endif
-#endif
-
-	for (;;)
-		;
+		platform::power::shutdown();
 }
 
 } // namespace

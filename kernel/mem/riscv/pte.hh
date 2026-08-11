@@ -1,8 +1,6 @@
 #pragma once
 #include "types.hh"
 #include "memlayout.hh"
-#include "platform.hh"
-#include "rv_csr.hh"
 namespace mem
 {
 	class PageTable;

@@ -1,5 +1,5 @@
 #include "shm_manager.hh"
-#include "platform.hh"
+#include "hal/arch.hh"
 #include "proc_manager.hh"
 #include "process_memory_manager.hh"
 #include "klib.hh"

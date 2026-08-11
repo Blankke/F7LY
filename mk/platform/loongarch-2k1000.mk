@@ -1,0 +1,20 @@
+# 龙芯 2K1000LA 实机的完整构建画像。
+PROFILE_ARCH := loongarch
+PROFILE_BOARD := 2k1000
+LS2K1000_IPV4 ?= 192.168.1.2
+LS2K1000_NETMASK ?= 255.255.255.0
+LS2K1000_GATEWAY ?= 192.168.1.1
+LS2K1000_DNS ?= 192.168.1.1
+LS2K1000_BROADCAST ?= 192.168.1.255
+
+PROFILE_NAME := Loongson 2K1000
+PROFILE_CPPFLAGS := -DLS2K1000_IPV4=\"$(LS2K1000_IPV4)\" \
+                     -DLS2K1000_NETMASK=\"$(LS2K1000_NETMASK)\" \
+                     -DLS2K1000_GATEWAY=\"$(LS2K1000_GATEWAY)\" \
+                     -DLS2K1000_DNS=\"$(LS2K1000_DNS)\" \
+                     -DLS2K1000_BROADCAST=\"$(LS2K1000_BROADCAST)\"
+PROFILE_DIR := kernel/platform/loongarch/2k1000
+PROFILE_LINK_SCRIPT := kernel/link/loongarch/2k1000.ld
+PROFILE_KERNEL_SUFFIX := -2k1000
+PROFILE_SRCS := kernel/fs/drivers/loongarch/ls2k1000_ahci.cc \
+                 kernel/net/drivers/loongarch/ls2k1000_gmac.cc

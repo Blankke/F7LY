@@ -24,6 +24,7 @@
 #include "prlimit.hh"
 #include "shm_manager.hh"
 #include "memlayout.hh"
+#include "mem/kernel_image.hh"
 #include "hal/tlb_shootdown.hh"
 
 namespace proc
@@ -32,11 +33,6 @@ namespace proc
 
     namespace
     {
-#ifdef RISCV
-        constexpr uint64 k_min_kernel_mm_ptr = KERNBASE;
-#elif defined(LOONGARCH)
-        constexpr uint64 k_min_kernel_mm_ptr = PHYSBASE;
-#endif
         inline uint32 max_reasonable_file_refcnt()
         {
             return num_process * max_open_files;
@@ -44,7 +40,7 @@ namespace proc
 
         inline bool is_kernel_mapped_range(uint64 addr, uint64 size)
         {
-            if (addr < k_min_kernel_mm_ptr || size == 0)
+            if (addr < mem::kernel_image_start_address() || size == 0)
             {
                 return false;
             }

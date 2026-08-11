@@ -1,23 +1,47 @@
 #include "platform_block.hh"
 
 #include "fs/buf.hh"
-#include "fs/drivers/virtio_blk.hh"
+#include "platform/block_backend.hh"
 #include "printer.hh"
-
-#if defined(LOONGARCH) && defined(BOARD_LS2K1000)
-#include "fs/drivers/loongarch/ls2k1000_ahci.hh"
-#endif
 
 namespace
 {
-    constexpr uint32 k_sector_size = 512;
+    constexpr uint32 k_sector_size = platform::block_backend::k_sector_size_bytes;
+    constexpr uint32 k_primary_device = 0;
+    constexpr uint32 k_max_gpt_entries_to_scan = 128;
+
+    enum class RootLayout
+    {
+        unknown,
+        whole_disk,
+        raw,
+        mbr,
+        gpt,
+    };
+
     uint64 g_root_start_sector = 0;
     uint64 g_root_sector_count = 0;
-
-#if defined(LOONGARCH) && defined(BOARD_LS2K1000)
+    RootLayout g_root_layout = RootLayout::unknown;
     uint8 g_partition_buffer[1024];
 
-    uint32 read_le32(const uint8 *data)
+    constexpr const char *layout_name(RootLayout layout)
+    {
+        switch (layout)
+        {
+        case RootLayout::whole_disk:
+            return "whole-disk";
+        case RootLayout::raw:
+            return "raw-ext4";
+        case RootLayout::mbr:
+            return "MBR";
+        case RootLayout::gpt:
+            return "GPT";
+        default:
+            return "unknown";
+        }
+    }
+
+    constexpr uint32 read_le32(const uint8 *data)
     {
         return static_cast<uint32>(data[0]) |
                (static_cast<uint32>(data[1]) << 8) |
@@ -31,14 +55,35 @@ namespace
                (static_cast<uint64>(read_le32(data + 4)) << 32);
     }
 
-    bool raw_read(void *buffer, uint64 sector, uint32 count)
+    uint64 raw_sector_count(int dev)
     {
-        return loongarch::ls2k1000::ahci::transfer(buffer, sector, count, false) == 0;
+        return platform::block_backend::capacity_bytes(dev) / k_sector_size;
     }
 
-    bool has_ext4_superblock(uint64 start_sector)
+    bool range_is_valid(uint64 start_sector, uint32 sector_count, uint64 capacity_sectors)
+    {
+        return sector_count != 0 && start_sector < capacity_sectors &&
+               static_cast<uint64>(sector_count) <= capacity_sectors - start_sector;
+    }
+
+    bool raw_read(void *buffer, uint64 sector, uint32 count)
+    {
+        if (buffer == nullptr || !range_is_valid(sector, count, raw_sector_count(k_primary_device)))
+        {
+            return false;
+        }
+        return platform::block_backend::read_write(
+                   k_primary_device, buffer, sector, count, false) == 0;
+    }
+
+    bool has_ext4_superblock(uint64 start_sector, uint64 partition_sectors)
     {
         // ext4 超级块从分区内偏移 1024 字节开始，magic 位于其中偏移 56。
+        // 少于三个扇区的区域不可能完整包含这里要读取的超级块字段。
+        if (partition_sectors < 3 || start_sector > UINT64_MAX - 2)
+        {
+            return false;
+        }
         if (!raw_read(g_partition_buffer, start_sector + 2, 1))
         {
             return false;
@@ -46,18 +91,18 @@ namespace
         return g_partition_buffer[56] == 0x53 && g_partition_buffer[57] == 0xef;
     }
 
-    bool select_root(uint64 start_sector, uint64 sector_count, const char *table, uint32 index)
+    bool select_root(uint64 start_sector, uint64 sector_count, RootLayout layout)
     {
-        const uint64 disk_sectors = loongarch::ls2k1000::ahci::capacity_bytes() / k_sector_size;
+        const uint64 disk_sectors = raw_sector_count(k_primary_device);
         if (sector_count == 0 || start_sector >= disk_sectors ||
-            sector_count > disk_sectors - start_sector || !has_ext4_superblock(start_sector))
+            sector_count > disk_sectors - start_sector ||
+            !has_ext4_superblock(start_sector, sector_count))
         {
             return false;
         }
         g_root_start_sector = start_sector;
         g_root_sector_count = sector_count;
-        printfGreen("[block] root=%s partition%u start=%lu sectors=%lu\n",
-                    table, index, start_sector, sector_count);
+        g_root_layout = layout;
         return true;
     }
 
@@ -79,19 +124,26 @@ namespace
         const uint64 entries_lba = read_le64(g_partition_buffer + 72);
         uint32 entry_count = read_le32(g_partition_buffer + 80);
         const uint32 entry_size = read_le32(g_partition_buffer + 84);
-        if (entries_lba == 0 || entry_size < 128 || entry_size > k_sector_size)
+        const uint64 disk_sectors = raw_sector_count(k_primary_device);
+        if (entries_lba == 0 || entries_lba >= disk_sectors ||
+            entry_size < 128 || entry_size > k_sector_size)
         {
             return false;
         }
-        if (entry_count > 128)
+        if (entry_count > k_max_gpt_entries_to_scan)
         {
-            entry_count = 128;
+            entry_count = k_max_gpt_entries_to_scan;
         }
 
         for (uint32 index = 0; index < entry_count; ++index)
         {
             const uint64 byte_offset = static_cast<uint64>(index) * entry_size;
-            const uint64 sector = entries_lba + byte_offset / k_sector_size;
+            const uint64 sector_offset = byte_offset / k_sector_size;
+            if (sector_offset > disk_sectors - entries_lba)
+            {
+                return false;
+            }
+            const uint64 sector = entries_lba + sector_offset;
             const uint32 in_sector = static_cast<uint32>(byte_offset % k_sector_size);
             const uint32 needed = in_sector + 48 > k_sector_size ? 2 : 1;
             if (!raw_read(g_partition_buffer, sector, needed))
@@ -110,7 +162,8 @@ namespace
             }
             const uint64 first = read_le64(entry + 32);
             const uint64 last = read_le64(entry + 40);
-            if (last >= first && select_root(first, last - first + 1, "GPT", index + 1))
+            // last-first+1 仅在 last>=first 时计算，避免损坏的 GPT 条目下溢。
+            if (last >= first && select_root(first, last - first + 1, RootLayout::gpt))
             {
                 return true;
             }
@@ -120,16 +173,14 @@ namespace
 
     bool discover_root_partition()
     {
-        const uint64 disk_sectors = loongarch::ls2k1000::ahci::capacity_bytes() / k_sector_size;
+        const uint64 disk_sectors = raw_sector_count(k_primary_device);
         if (disk_sectors == 0)
         {
             return false;
         }
-        if (has_ext4_superblock(0))
+        // 裸 ext4 镜像是 QEMU 评测盘的常见形式，必须先于分区表探测。
+        if (select_root(0, disk_sectors, RootLayout::raw))
         {
-            g_root_start_sector = 0;
-            g_root_sector_count = disk_sectors;
-            printfGreen("[block] SATA disk contains a raw ext4 root\n");
             return true;
         }
         if (!raw_read(g_partition_buffer, 0, 1) ||
@@ -153,41 +204,52 @@ namespace
         for (uint32 index = 0; index < 4; ++index)
         {
             if (partition_types[index] != 0 && partition_types[index] != 0xee &&
-                select_root(partition_starts[index], partition_counts[index], "MBR", index + 1))
+                select_root(partition_starts[index], partition_counts[index], RootLayout::mbr))
             {
                 return true;
             }
         }
         return protective_gpt && scan_gpt();
     }
-#endif
 } // namespace
 
 bool platform_block_init()
 {
     g_root_start_sector = 0;
     g_root_sector_count = 0;
-#if defined(LOONGARCH) && defined(BOARD_LS2K1000)
-    if (!loongarch::ls2k1000::ahci::initialize())
+    g_root_layout = RootLayout::unknown;
+
+    if (!platform::block_backend::initialize())
     {
+        platformDiagnosticError("[block] backend=%s initialization failed\n",
+                                platform::block_backend::name());
+        return false;
+    }
+
+    const uint64 disk_sectors = raw_sector_count(k_primary_device);
+    if (disk_sectors == 0)
+    {
+        platformDiagnosticError("[block] backend=%s reported zero capacity\n",
+                                platform::block_backend::name());
         return false;
     }
     if (!discover_root_partition())
     {
-        printfRed("[block] SATA disk has no usable ext4 root partition\n");
-        return false;
+        // 没有 ext4 不是块设备初始化失败。把整盘显式交给文件系统策略，
+        // 让它仍可识别 raw FAT，或使用 DTB initrd 作为 ext4 根。这里不能
+        // 提前 panic，否则上层已经实现的 initrd 回退永远不可达。
+        g_root_start_sector = 0;
+        g_root_sector_count = disk_sectors;
+        g_root_layout = RootLayout::whole_disk;
+        platformDiagnosticWarn("[block] backend=%s has no ext4 region; exposing whole disk\n",
+                               platform::block_backend::name());
     }
+
+    platformDiagnosticInfo("[block] backend=%s dev=0 layout=%s start=%lu sectors=%lu capacity=%lu bytes\n",
+                           platform::block_backend::name(), layout_name(g_root_layout),
+                           g_root_start_sector, g_root_sector_count,
+                           g_root_sector_count * static_cast<uint64>(k_sector_size));
     return true;
-#elif defined(LOONGARCH)
-    virtio_probe();
-    virtio_disk_init();
-    g_root_sector_count = virtio_disk_capacity_bytes(0) / k_sector_size;
-    return g_root_sector_count != 0;
-#else
-    // RISC-V 的现有启动路径仍负责初始化 VirtIO；本门面只统一后续 I/O 调用。
-    g_root_sector_count = virtio_disk_capacity_bytes(0) / k_sector_size;
-    return g_root_sector_count != 0;
-#endif
 }
 
 int platform_block_rw_sectors(int dev, void *buffer, uint64 start_sector,
@@ -197,17 +259,24 @@ int platform_block_rw_sectors(int dev, void *buffer, uint64 start_sector,
     {
         return 0;
     }
-#if defined(LOONGARCH) && defined(BOARD_LS2K1000)
-    if (dev != 0 || start_sector >= g_root_sector_count ||
-        static_cast<uint64>(sector_count) > g_root_sector_count - start_sector)
+    if (buffer == nullptr || dev < 0)
     {
         return -1;
     }
-    return loongarch::ls2k1000::ahci::transfer(
-        buffer, g_root_start_sector + start_sector, sector_count, write != 0);
-#else
-    return virtio_disk_rw_sectors(dev, buffer, start_sector, sector_count, write);
-#endif
+
+    // 设备 0 暴露探测出的 ext4 区域；若未找到，则按上层启动策略要求暴露
+    // 整盘。其他平台裸盘编号仍由当前唯一 backend 定义并执行相同边界检查。
+    const uint64 logical_sector_count =
+        dev == static_cast<int>(k_primary_device) ? g_root_sector_count : raw_sector_count(dev);
+    if (!range_is_valid(start_sector, sector_count, logical_sector_count))
+    {
+        return -1;
+    }
+
+    const uint64 physical_sector =
+        dev == static_cast<int>(k_primary_device) ? g_root_start_sector + start_sector : start_sector;
+    return platform::block_backend::read_write(
+        dev, buffer, physical_sector, sector_count, write != 0);
 }
 
 void platform_block_rw(struct buf *buffer, int write)
@@ -221,13 +290,13 @@ void platform_block_rw(struct buf *buffer, int write)
 
 uint64 platform_block_capacity_bytes(int dev)
 {
-#if defined(LOONGARCH) && defined(BOARD_LS2K1000)
-    if (dev != 0)
+    if (dev < 0)
     {
         return 0;
     }
-    return g_root_sector_count * static_cast<uint64>(k_sector_size);
-#else
-    return virtio_disk_capacity_bytes(dev);
-#endif
+    if (dev == static_cast<int>(k_primary_device))
+    {
+        return g_root_sector_count * static_cast<uint64>(k_sector_size);
+    }
+    return raw_sector_count(dev) * static_cast<uint64>(k_sector_size);
 }

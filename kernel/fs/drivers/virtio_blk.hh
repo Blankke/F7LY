@@ -52,7 +52,3 @@ int virtio_disk_rw_sectors(int dev, void *buf, uint64 start_sector, uint32 secto
 uint64 virtio_disk_capacity_bytes(int dev);
 void virtio_disk_intr(void);
 void virtio_disk_intr2(void);
-
-#ifdef LOONGARCH
-void virtio_probe();
-#endif

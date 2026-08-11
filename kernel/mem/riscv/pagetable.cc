@@ -4,7 +4,7 @@
 #include "mem/loongarch/pagetable.hh"
 #endif
 #include "memlayout.hh"
-#include "platform.hh"
+#include "hal/arch.hh"
 #include "klib.hh"
 #include "printer.hh"
 #include "physical_memory_manager.hh"

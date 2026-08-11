@@ -1,11 +1,9 @@
 #include "ls2k1000_gmac.hh"
 
-#ifdef BOARD_LS2K1000
-
 #include "devs/dtb.hh"
 #include "hal/loongarch/platform_board.hh"
 #include "libs/klib.hh"
-#include "platform.hh"
+#include "hal/arch.hh"
 #include "printer.hh"
 #include "spinlock.hh"
 #include "tm/time.hh"
@@ -259,7 +257,7 @@ bool reset_dma()
 {
     dma_write(k_dma_bus_mode, k_dma_reset);
     const uint64 start = rdtime();
-    const uint64 timeout_cycles = tmm::qemu_fre_cal_cycles(k_dma_reset_timeout_us);
+    const uint64 timeout_cycles = tmm::microseconds_to_cycles(k_dma_reset_timeout_us);
     while (rdtime() - start < timeout_cycles)
     {
         if ((dma_read(k_dma_bus_mode) & k_dma_reset) == 0)
@@ -514,5 +512,3 @@ void debug_status()
                 dma_read(k_dma_status), dma_read(k_dma_control));
 }
 } // namespace loongarch::ls2k1000::gmac
-
-#endif

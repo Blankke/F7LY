@@ -41,7 +41,6 @@ extern filesystem_op_t *fs_ops_table[VFS_MAX_FS];
 extern SpinLock fs_table_lock;
 
 void filesystem_init(void);
-void filesystem2_init(void);
 void init_fs_table(void);
 void fs_init(filesystem_t *fs, int dev, fs_t fs_type, const char *path);
 

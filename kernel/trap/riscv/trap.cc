@@ -1,15 +1,12 @@
 #ifdef RISCV
 #include "types.hh"
 #include "trap.hh"
-#include "platform.hh"
+#include "hal/arch.hh"
 #include "hal/riscv/sbi.hh"
+#include "hal/irq.hh"
 #include "hal/tlb_shootdown.hh"
 #include "param.h"
-#include "plic.hh"
-#include "mem/memlayout.hh"
-#include "devs/console.hh"
 #include "printer.hh"
-#include "rv_csr.hh"
 #include "proc/proc.hh"
 #include "proc/proc_manager.hh"
 #include "proc/scheduler.hh"
@@ -23,8 +20,6 @@
 #include "virtual_memory_manager.hh"
 #include "timer_interface.hh"
 #include "timer_manager.hh"
-#include "fs/drivers/virtio_blk.hh"
-#include "net/drivers/virtio_net.hh"
 #include "trap/interrupt_stats.hh"
 #include "proc/posix_timers.hh"
 #include "proc/futex.hh"
@@ -85,7 +80,7 @@ void trap_manager::set_next_timeout()
   // RISC-V 的 OpenSBI/ACLINT timer 频率是固定硬件计数器。
   // 这里统一使用时间子系统给出的每 tick 周期数，避免再维护一套
   // 与 LoongArch 不一致的独立 INTERVAL 常量。
-  sbi_set_timer(r_time() + tmm::cycles_per_tick());
+  sbi_set_timer(tmm::get_hw_time_stamp() + tmm::cycles_per_tick());
 }
 
 // 处理外部中断和软件中断
@@ -104,48 +99,8 @@ int trap_manager::devintr()
   if ((scause & 0x8000000000000000L) &&
       (scause & 0xff) == 9)
   {
-    // this is a supervisor external interrupt, via PLIC.
-
-    // irq indicates which device interrupted.
-    int irq = plic_mgr.claim();
-
-    // intr_stats::k_intr_stats.record_interrupt(irq);
-    if (irq == UART0_IRQ)
-    {
-      while (true)
-      {
-        int c = sbi_console_getchar();
-        if (c < 0)
-        {
-          break;
-        }
-        dev::kConsole.console_intr(c);
-      }
-    }
-    //!!写完磁盘后修改
-    else if (irq == VIRTIO0_IRQ)
-    {
-      virtio_disk_intr();
-    }
-    else if (net::virtio_net_uses_irq(irq))
-    {
-      net::virtio_net_intr();
-    }
-    else if (irq == VIRTIO1_IRQ)
-    {
-      virtio_disk_intr2();
-    }
-    else if (irq)
-    {
-      printf("unexpected interrupt irq=%d\n", irq);
-    }
-
-    // the PLIC allows each device to raise at most one
-    // interrupt at a time; tell the PLIC the device is
-    // now allowed to interrupt again.
-    if (irq)
-      plic_mgr.complete(irq);
-
+    // 设备与 PLIC 编号都封装在 hal::irq；架构 trap 只判断中断类别。
+    hal::irq::dispatch();
     return 1;
   }
   if (scause == 0x8000000000000005L)
@@ -263,7 +218,7 @@ void trap_manager::usertrap()
 {
   // printfMagenta("into usertrap\n");
   int which_dev = 0;
-  if ((r_sstatus() & riscv::csr::sstatus_spp_m) != 0)
+  if ((r_sstatus() & SSTATUS_SPP) != 0)
     panic("usertrap: not from user mode");
 
   if (intr_get() != 0)
@@ -507,8 +462,8 @@ void trap_manager::usertrapret()
   p->_trapframe->kernel_hartid = r_tp();
 
   uint64 x = r_sstatus();
-  x &= ~riscv::csr::sstatus_spp_m;
-  x |= riscv::csr::sstatus_spie_m;
+  x &= ~SSTATUS_SPP;
+  x |= SSTATUS_SPIE;
   // 用户和内核都会使用 FPU；保持 FS=Dirty，下一次 uservec 先保存用户现场，
   // 返回前再恢复，隔离不同任务以及内核自身的浮点寄存器使用。
   x |= 0x3ULL << 13;
@@ -524,7 +479,7 @@ void trap_manager::usertrapret()
   // ASID 0 保留给内核；用户地址空间在回收池完成全核 flush 前不会复用
   // 非零 ASID，因此 trap 热路径只需切换 satp，无需每次清空本 hart 全 TLB。
   hal::tlb::enter_mm(*p->get_memory_manager());
-  uint64 satp = MAKE_SATP_ASID(
+  uint64 satp = riscv::make_satp(
       p->get_pagetable()->get_base(), riscv_user_asid(p->get_memory_manager()));
   // debug
 

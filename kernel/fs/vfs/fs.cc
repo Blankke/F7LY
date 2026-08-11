@@ -1,7 +1,7 @@
 #include "fs/vfs/fs.hh"
 
 #include "types.hh"
-#include "platform.hh"
+#include "hal/arch.hh"
 #include "param.h"
 #include "vfs_ext4_ext.hh"
 #include "libs/string.hh"
@@ -168,8 +168,6 @@ filesystem_op_t *fs_ops_table[VFS_MAX_FS] = {
 
 filesystem_t ext4_fs;
 filesystem_t fat32_fs;
-
-filesystem_t root_fs; // 仅用来加载init程序
 
 SpinLock fs_table_lock;
 
@@ -369,19 +367,6 @@ void dir_init(void)
         vfs_ext_mkdir((char *)"/usr/lib", 0777);
     else
         free_inode(ip);
-}
-
-void filesystem2_init(void)
-{
-    fs_table_lock.acquire();
-    fs_table[3] = &root_fs;
-    root_fs.dev = 2;
-    root_fs.type = EXT4;
-    root_fs.fs_op = fs_ops_table[root_fs.type];
-    strcpy(root_fs.path, "/");
-    fs_table_lock.release();
-    int ret = vfs_ext_mount2(&root_fs, 0, NULL);
-    printf("fs_mount done: %d\n", ret);
 }
 
 int fs_mount(int dev, fs_t fs_type,

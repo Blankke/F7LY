@@ -1,109 +1,10 @@
 #pragma once
 
-#include "types.hh"
-#include "platform.hh"
-#include "mem/memlayout.hh"
+#include "hal/arch.hh"
 #include "spinlock.hh"
+#include "types.hh"
 
-#ifdef RISCV
-// VirtIO network device registers (same MMIO interface as disk)
-#define VIRTIO_MMIO_MAGIC_VALUE 0x000 // 0x74726976
-#define VIRTIO_MMIO_VERSION 0x004     // version; 1 is legacy
-#define VIRTIO_MMIO_DEVICE_ID 0x008   // device type; 1 is net, 2 is disk
-#define VIRTIO_MMIO_VENDOR_ID 0x00c   // 0x554d4551
-#define VIRTIO_MMIO_DEVICE_FEATURES 0x010
-#define VIRTIO_MMIO_DRIVER_FEATURES 0x020
-#define VIRTIO_MMIO_GUEST_PAGE_SIZE 0x028  // page size for PFN, write-only
-#define VIRTIO_MMIO_QUEUE_SEL 0x030        // select queue, write-only
-#define VIRTIO_MMIO_QUEUE_NUM_MAX 0x034    // max size of current queue, read-only
-#define VIRTIO_MMIO_QUEUE_NUM 0x038        // size of current queue, write-only
-#define VIRTIO_MMIO_QUEUE_ALIGN 0x03c      // used ring alignment, write-only
-#define VIRTIO_MMIO_QUEUE_PFN 0x040        // physical page number for queue, read/write
-#define VIRTIO_MMIO_QUEUE_READY 0x044      // ready bit
-#define VIRTIO_MMIO_QUEUE_NOTIFY 0x050     // write-only
-#define VIRTIO_MMIO_INTERRUPT_STATUS 0x060 // read-only
-#define VIRTIO_MMIO_INTERRUPT_ACK 0x064    // write-only
-#define VIRTIO_MMIO_STATUS 0x070           // read/write
-#define VIRTIO_MMIO_CONFIG 0x100           // device-specific config space
-
-// Status register bits
-#define VIRTIO_CONFIG_S_ACKNOWLEDGE 1
-#define VIRTIO_CONFIG_S_DRIVER 2
-#define VIRTIO_CONFIG_S_DRIVER_OK 4
-#define VIRTIO_CONFIG_S_FEATURES_OK 8
-
-// VirtIO net feature bits
-#define VIRTIO_NET_F_CSUM 0                /* Host handles pkts w/ partial csum */
-#define VIRTIO_NET_F_GUEST_CSUM 1          /* Guest handles pkts w/ partial csum */
-#define VIRTIO_NET_F_CTRL_GUEST_OFFLOADS 2 /* Control channel offloads */
-#define VIRTIO_NET_F_MTU 3                 /* Initial MTU advice */
-#define VIRTIO_NET_F_MAC 5                 /* Host has given MAC address. */
-#define VIRTIO_NET_F_GUEST_TSO4 7          /* Guest can handle TSOv4 in. */
-#define VIRTIO_NET_F_GUEST_TSO6 8          /* Guest can handle TSOv6 in. */
-#define VIRTIO_NET_F_GUEST_ECN 9           /* Guest can handle TSO[6] w/ ECN in. */
-#define VIRTIO_NET_F_GUEST_UFO 10          /* Guest can handle UFO in. */
-#define VIRTIO_NET_F_HOST_TSO4 11          /* Host can handle TSOv4 in. */
-#define VIRTIO_NET_F_HOST_TSO6 12          /* Host can handle TSOv6 in. */
-#define VIRTIO_NET_F_HOST_ECN 13           /* Host can handle TSO[6] w/ ECN in. */
-#define VIRTIO_NET_F_HOST_UFO 14           /* Host can handle UFO in. */
-#define VIRTIO_NET_F_MRG_RXBUF 15          /* Host can merge receive buffers. */
-#define VIRTIO_NET_F_STATUS 16             /* virtio_net_config.status available */
-#define VIRTIO_NET_F_CTRL_VQ 17            /* Control channel available */
-#define VIRTIO_NET_F_CTRL_RX 18            /* Control channel RX mode support */
-#define VIRTIO_NET_F_CTRL_VLAN 19          /* Control channel VLAN filtering */
-#define VIRTIO_NET_F_CTRL_RX_EXTRA 20      /* Extra RX mode control support */
-#define VIRTIO_NET_F_GUEST_ANNOUNCE 21     /* Guest can announce device on the network */
-#define VIRTIO_NET_F_MQ 22                 /* Device supports Receive Flow Steering */
-
-// Common VirtIO feature bits
-#define VIRTIO_F_ANY_LAYOUT 27
-#define VIRTIO_RING_F_INDIRECT_DESC 28
-#define VIRTIO_RING_F_EVENT_IDX 29
-
-// Queue constants
-#define VIRTIO_NET_RX_QUEUE_IDX 0
-#define VIRTIO_NET_TX_QUEUE_IDX 1
-
-#elif defined(LOONGARCH)
-// LoongArch specific includes for PCI-based VirtIO
-#include "trap/loongarch/pci.h"
-#include "fs/drivers/loongarch/virtio_pci.hh"
-
-// Status register bits (same as RISCV)
-#define VIRTIO_CONFIG_S_ACKNOWLEDGE 1
-#define VIRTIO_CONFIG_S_DRIVER 2
-#define VIRTIO_CONFIG_S_DRIVER_OK 4
-#define VIRTIO_CONFIG_S_FEATURES_OK 8
-
-// VirtIO net feature bits (same as RISCV)
-#define VIRTIO_NET_F_CSUM 0
-#define VIRTIO_NET_F_GUEST_CSUM 1
-#define VIRTIO_NET_F_MAC 5
-#define VIRTIO_NET_F_HOST_TSO4 11
-#define VIRTIO_NET_F_HOST_TSO6 12
-#define VIRTIO_NET_F_MRG_RXBUF 15
-#define VIRTIO_NET_F_STATUS 16
-#define VIRTIO_NET_F_CTRL_VQ 17
-#define VIRTIO_NET_F_CTRL_RX 18
-#define VIRTIO_NET_F_CTRL_VLAN 19
-#define VIRTIO_NET_F_MQ 22
-
-// Common VirtIO feature bits
-#define VIRTIO_F_ANY_LAYOUT 27
-#define VIRTIO_RING_F_INDIRECT_DESC 28
-#define VIRTIO_RING_F_EVENT_IDX 29
-
-// VirtIO Net device type for PCI
-#define VIRTIO_NET_VENDOR_ID 0x1af4
-#define VIRTIO_NET_DEVICE_ID 0x1000
-
-// Queue constants
-#define VIRTIO_NET_RX_QUEUE_IDX 0
-#define VIRTIO_NET_TX_QUEUE_IDX 1
-
-#endif
-
-// Common definitions for both architectures
+// 这些常量只描述 VirtIO net 公共队列布局，不描述 MMIO/PCI 或任何板级资源。
 #define NUM_NET_DESC 32    // Number of descriptors per queue (must be power of 2)
 #define ETH_ALEN 6         // Ethernet address length
 #define ETH_FRAME_LEN 1514 // Maximum Ethernet frame size
@@ -197,22 +98,11 @@ namespace net
         uint16 status;              // Link status
         uint16 max_virtqueue_pairs; // Number of supported queue pairs
         uint64 features;            // negotiated feature set
-#ifdef RISCV
-        uint64 mmio_base;            // 扫描到的 virtio-mmio 槽位基址
-        int irq;                     // 该槽位对应的 PLIC 中断号
-#endif
         bool initialized;
         bool link_up;
 
         // Synchronization
         SpinLock net_lock;
-
-#ifdef LOONGARCH
-        // PCI specific fields for LoongArch
-        virtio_pci_hw_t virtio_net_hw;
-        uint64 pci_dev;
-        int port_id;
-#endif
     };
 
     // Function declarations
@@ -229,13 +119,4 @@ namespace net
     int virtio_net_test_send(void);
     int virtio_net_test_recv(void);
     void virtio_net_debug_status(void);
-
-// Architecture specific functions
-#ifdef RISCV
-    bool virtio_net_init_mmio(void);
-    bool virtio_net_uses_irq(int irq);
-#elif defined(LOONGARCH)
-    bool virtio_net_init_pci(void);
-    int virtio_net_probe_pci(void);
-#endif
 }

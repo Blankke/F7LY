@@ -9,8 +9,7 @@
 #pragma once 
 #ifdef LOONGARCH
 #include "types.hh"
-#include "la_csr.hh"
-#include "platform.hh"
+#include "hal/arch.hh"
 
 
 namespace mem

@@ -43,30 +43,11 @@ entry_common:
         li.w        $t0, 0x01                 # FPE=1, SXE=0, ASXE=0, BTE=0
         csrwr       $t0, LOONGARCH_CSR_EUEN
 
-#ifdef BOARD_LS2K1000
-        # Printer/Console 尚未初始化时，直接用 16550 THR 留下一条最早期标记。
-        # 仅主核输出；每个字符最多轮询固定次数，UART 地址或时钟异常时放弃
-        # 日志并继续启动，不能让诊断代码成为新的阻塞点。
+        # 早期输出属于平台实现。QEMU 提供空实现，2K1000 提供有界 UART 标记；
+        # LoongArch 公共入口不再包含板级 MMIO 地址。
         bnez        $s4, .Learly_uart_done
-        li.d        $t2, 0x800000001fe20000    # UART0 非缓存 DMW 地址
-        la.global   $t3, early_boot_message
-.Learly_uart_next:
-        li.w        $t5, 1000000
-.Learly_uart_wait:
-        ld.bu       $t4, $t2, 5               # LSR.THRE
-        andi        $t4, $t4, 0x20
-        bnez        $t4, .Learly_uart_ready
-        addi.w      $t5, $t5, -1
-        bnez        $t5, .Learly_uart_wait
-        b           .Learly_uart_done
-.Learly_uart_ready:
-        ld.bu       $t4, $t3, 0
-        beqz        $t4, .Learly_uart_done
-        st.b        $t4, $t2, 0
-        addi.d      $t3, $t3, 1
-        b           .Learly_uart_next
+        bl          platform_early_boot_marker
 .Learly_uart_done:
-#endif
 
         # 主入口无条件清理普通 BSS，因此引导核不再被错误限定为 CPU0；次核
         # 从 _secondary_entry 到达并跳过本段。启动栈位于 sbss_clear 之前。
@@ -111,12 +92,6 @@ bss_clear_done:
         bl          main
 spin:
         b           spin
-
-#ifdef BOARD_LS2K1000
-    .section .rodata
-early_boot_message:
-    .asciz "[early] entry reached\n"
-#endif
 
     .section .bss.stack
     .align 12

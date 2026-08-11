@@ -1,25 +1,23 @@
 #ifdef LOONGARCH
 #include "types.hh"
 #include "trap.hh"
-#include "platform.hh"
+#include "hal/arch.hh"
 #include "param.h"
 // #include "plic.hh"
 #include "mem.hh"
 #include "mem/memlayout.hh"
-#include "devs/console.hh"
+#include "hal/irq.hh"
 #include "printer.hh"
 #include "proc/proc.hh"
 #include "proc/proc_manager.hh"
 #include "proc/scheduler.hh"
 #include "trap_func_wrapper.hh"
-#include "platform_irq.hh"
 #include "syscall_handler.hh"
 #include "cpu.hh"
 #include "physical_memory_manager.hh"
 #include "virtual_memory_manager.hh"
 #include "heap_memory_manager.hh"
 #include "vfs/file/normal_file.hh"
-#include "devs/loongarch/disk_driver.hh"
 #include "trap/interrupt_stats.hh"
 #include "timer_interface.hh"
 #include "proc/posix_timers.hh"
@@ -149,8 +147,6 @@ void trap_manager::inithart()
 // 处理外部中断和软件中断
 int trap_manager::devintr()
 {
-  static bool block_irq_warned = false;
-
   uint32 estat = r_csr_estat();
   uint32 ecfg = r_csr_ecfg();
   uint32 ecode = loongarch_exception_code(estat);
@@ -175,41 +171,8 @@ int trap_manager::devintr()
 
   if (estat & ecfg & HWI_VEC)
   {
-    // this is a hardware interrupt, via IOCR.
-
-    // irq indicates which device interrupted.
-    uint64 irq = loongarch::platform_irq::claim();
-    // printf("%d\n", irq);
-    // 处理串口中断
-    uint64 handled_irq_mask = 0;
-    const uint64 uart_irq = loongarch::platform_irq::uart_source_mask();
-    const uint64 block_irq = loongarch::platform_irq::block_source_mask();
-    if (irq & uart_irq)
-    {
-      // 交互式 shell/stdin 依赖串口 RX 中断把字符推进 console 行规程；
-      // 这里只做 ack 会导致输出正常、输入永远到不了 kConsole。
-      dev::k_uart.handle_intr();
-      handled_irq_mask |= uart_irq;
-    }
-
-    if (irq & block_irq)
-    {
-      if (!block_irq_warned)
-      {
-        block_irq_warned = true;
-        printfYellow("[trap] 块设备中断当前未启用异步完成，已确认并放行\n");
-      }
-      handled_irq_mask |= block_irq;
-    }
-
-    uint64 remaining_irq = irq & ~handled_irq_mask;
-    if (remaining_irq)
-    {
-      printf("unexpected interrupt irq=0x%lx\n", remaining_irq);
-    }
-
-    loongarch::platform_irq::complete(irq);
-
+    // 中断控制器事务及设备 fan-out 都由公共层处理，trap 不再认识 UART/磁盘。
+    hal::irq::dispatch();
     return 1;
   }
   else if (estat & ecfg & TI_VEC)

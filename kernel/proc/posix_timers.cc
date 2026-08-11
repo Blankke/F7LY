@@ -131,7 +131,7 @@ bool read_task_cpu_clock(proc::Pcb *p, tmm::timespec *tp)
   }
 
   uint64 cpt = tmm::cycles_per_tick();
-  uint64 freq = tmm::get_main_frequence();
+  uint64 freq = tmm::clock_frequency_hz();
   uint64 user_time_cycles = p->get_user_ticks() * cpt;
   uint64 user_time_sec = user_time_cycles / freq;
   uint64 user_time_nsec = ((user_time_cycles % freq) * 1000000000L) / freq;

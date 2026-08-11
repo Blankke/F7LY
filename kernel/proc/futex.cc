@@ -5,7 +5,6 @@
 #include "proc/proc_manager.hh"
 #include "proc/proc.hh"
 #include "virtual_memory_manager.hh"
-#include "platform.hh"
 #include "hal/smp.hh"
 #include "sys/syscall_defs.hh"  // 添加syscall错误码定义
 #include "proc/signal.hh"       // 添加信号处理定义
@@ -120,7 +119,7 @@ namespace
             return false;
         }
 
-        uint64 freq = tmm::get_main_frequence();
+        uint64 freq = tmm::clock_frequency_hz();
         uint64 sec_cycles = static_cast<uint64>(ts.tv_sec) * freq;
         uint64 nsec_cycles = (static_cast<uint64>(ts.tv_nsec) * freq) / k_nsec_per_sec;
         cycles = sec_cycles + nsec_cycles;

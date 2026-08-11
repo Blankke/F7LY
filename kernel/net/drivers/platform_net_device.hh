@@ -16,10 +16,5 @@ int receive(void *data, uint32 *length);
 void poll();
 void get_mac(uint8 mac[k_mac_address_length]);
 const char *name();
-const char *ipv4_address();
-const char *ipv4_netmask();
-const char *ipv4_gateway();
-const char *ipv4_dns();
-const char *ipv4_broadcast();
 void debug_status();
 } // namespace net::platform_device

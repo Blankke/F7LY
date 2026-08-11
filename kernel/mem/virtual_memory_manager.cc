@@ -1,15 +1,16 @@
 #include "klib.hh"
 #include "virtual_memory_manager.hh"
 #include "physical_memory_manager.hh"
-#include "trap/loongarch/pci.h"
+#include "kernel_image.hh"
 #include "mem.hh" // 添加mmap相关常量定义
 #ifdef RISCV
+#include "hal/riscv/platform_board.hh"
 #include "mem/riscv/pagetable.hh"
 #elif defined(LOONGARCH)
 #include "mem/loongarch/pagetable.hh"
 #endif
 #include "memlayout.hh"
-#include "platform.hh"
+#include "libs/algorithm.hh"
 #include "printer.hh"
 #include "fs/vfs/vfs_ext4_ext.hh" // 添加vfs_ext_get_filesize函数
 #include "proc/signal.hh"         // 添加信号处理
@@ -20,7 +21,6 @@
 #include "proc/proc.hh"
 #include "proc_manager.hh"
 #include "sys/syscall_defs.hh"
-#include "net/drivers/virtio_net.hh"
 #include "fs/vfs/vfs_utils.hh"
 #include "fs/vfs/virtual_fs.hh"
 #include "hal/tlb_shootdown.hh"
@@ -382,7 +382,7 @@ namespace mem
         _virt_mem_lock.init(lock_name);
         // 创建内核页表
         k_pagetable = kvmmake();
-        // for(uint64 va = KERNBASE; va < (uint64)etext; va += PGSIZE)
+        // 可按链接符号 kernel_start 到 etext 检查内核文本映射。
         // {
         //     uint64 ppp= (uint64)k_pagetable.walk_addr(va);
         //     printfRed("va: %p, pa: %p\n", va, ppp);
@@ -404,7 +404,7 @@ namespace mem
         // satp 是每个 hart 的寄存器。主核建表后和次核上线时都要各自刷新
         // 本地 TLB，不能把“写过一次 satp”误当成全局状态。
         sfence_vma();
-        w_satp(MAKE_SATP(k_pagetable.get_base()));
+        w_satp(riscv::make_satp(k_pagetable.get_base()));
         sfence_vma();
 #elif defined(LOONGARCH)
         // PGDL/PGDH、页表遍历参数和 TLB 同样属于每个 CPU。空 PGDH 已由
@@ -449,7 +449,7 @@ namespace mem
             pte = pt.walk(a, /*alloc*/ true);
             // printfCyan("walk: va=0x%x, pte_addr=%p, pte_data=%p\n", a, pte.get_data(), pte.get_data());
             // DEBUG:
-            //  if(va == KERNBASE)
+            //  if(va == mem::kernel_image_start_address())
             //  {
             //      pte = pt.walk(a, false);
             //  }
@@ -1929,7 +1929,7 @@ namespace mem
             pte.set_data(pte.get_data() & ~riscv::PteEnum::pte_user_m);
 #elif defined(LOONGARCH)
         if (pte.is_valid())
-            pte.set_data(pte.get_data() & ~loongarch::PteEnum::pte_plv_m); // PTE_U
+            pte.set_data(pte.get_data() & ~loongarch::pte_plv_m); // 清除用户 PLV
 #endif
         flush_user_pt_range(pt, PGROUNDDOWN(va), PGSIZE);
     }
@@ -2014,27 +2014,6 @@ namespace mem
         }
     }
 
-    void VirtualMemoryManager::pci_map(int bus, int dev, int func, void *pages)
-    {
-#ifdef LOONGARCH
-
-        uint64 va = PCIE0_ECAM_V + ((bus << 16) | (dev << 11) | (func << 8));
-        uint64 pa = PCIE0_ECAM + ((bus << 16) | (dev << 11) | (func << 8));
-        map_pages(k_pagetable, va, PGSIZE, pa, PTE_MAT | PTE_W | PTE_P | PTE_D);
-        static int first = 0;
-        if (!first)
-        {
-            va = PCIE0_MMIO_V;
-            pa = PCIE0_MMIO;
-            map_pages(k_pagetable, va, 16 * PGSIZE, pa, PTE_MAT | PTE_W | PTE_P | PTE_D);
-            first = 1;
-        }
-
-        // mappages(kernel_pagetable, ((uint64)pages) & (~(DMWIN_MASK)), 2 * PGSIZE, pages, PTE_W | PTE_P | PTE_D | PTE_MAT);
-
-#endif
-    }
-
     PageTable VirtualMemoryManager::kvmmake()
     {
         PageTable pt;
@@ -2045,22 +2024,23 @@ namespace mem
         memset((void *)pt.get_base(), 0, PGSIZE);
         // pt.print_page_table();
 #ifdef RISCV
-        // uart registers
-        kvmmap(pt, UART0, UART0, PGSIZE, PTE_R | PTE_W);
-        // printfGreen("[vmm] kvmmake uart0 success\n");
-        // uint64 ppp = (uint64)pt.walk_addr(UART0);
-        // printfGreen("va: %p, pa: %p\n", UART0, ppp);
-        // virtio-mmio 槽位由 QEMU 按设备顺序分配，整段映射后驱动可安全扫描。
-        kvmmap(pt, VIRTIO_MMIO_FIRST, VIRTIO_MMIO_FIRST,
-               VIRTIO_MMIO_COUNT * PGSIZE, PTE_R | PTE_W);
-        // // CLINT
-        kvmmap(pt, CLINT, CLINT, 0x10000, PTE_R | PTE_W);
-        // printfGreen("[vmm] kvmmake clint success\n");
-        // // PLIC
-        kvmmap(pt, PLIC, PLIC, 0x400000, PTE_R | PTE_W);
-        // printfGreen("[vmm] kvmmake plic success\n");
+        const uint64 kernel_base = mem::kernel_image_start_address();
+        // 页表只消费当前画像声明的 typed MMIO 区间。新增开发板时由其平台
+        // 配置提供资源表，VMM 不再保存 UART/PLIC/VirtIO 地址副本。
+        for (const platform::MmioRegion &region :
+             riscv::board::k_kernel_mmio_regions)
+        {
+            kvmmap(pt, region.physical_base, region.physical_base,
+                   region.size, PTE_R | PTE_W);
+        }
         // map kernel text executable and read-only.
-        kvmmap(pt, KERNBASE, KERNBASE, (uint64)etext - KERNBASE, PTE_R | PTE_X);
+        if (reinterpret_cast<uint64>(etext) <= kernel_base)
+        {
+            panic("[vmm] invalid RISC-V kernel text range: base=%p etext=%p",
+                  kernel_base, etext);
+        }
+        kvmmap(pt, kernel_base, kernel_base,
+               reinterpret_cast<uint64>(etext) - kernel_base, PTE_R | PTE_X);
         // printfGreen("[vmm] kvmmake kernel text success\n");
         // map kernel data and the physical RAM we'll make use of.
         const uint64 linear_top = k_pmm.get_kernel_linear_top();
@@ -2083,9 +2063,9 @@ namespace mem
             }
             const uint64 map_start = PGROUNDDOWN(raw_start);
             const uint64 map_end = PGROUNDUP(raw_end);
-            if (map_start < KERNBASE)
+            if (map_start < kernel_base)
             {
-                const uint64 prefix_end = map_end < KERNBASE ? map_end : KERNBASE;
+                const uint64 prefix_end = map_end < kernel_base ? map_end : kernel_base;
                 if (prefix_end > map_start)
                 {
                     kvmmap(pt, map_start, map_start,
@@ -2117,7 +2097,7 @@ namespace mem
             uint64 dtb_size = DtbManager::get_dtb_size();
             if (dtb_size == 0)
             {
-                dtb_size = _1M * 2;
+                panic("[vmm] validated DTB has no usable totalsize");
             }
             if (k_dtb_addr > ~0ULL - dtb_size)
             {
@@ -2137,10 +2117,10 @@ namespace mem
         这二者会分别映射trampoline和kstack ，我们内核的页表初始化的时候已经映射了trampoline
         这里要映射的*/
 
-        // DEBUG:虚拟化后所有代码卡死，检查所有内核代码映射，KERNBASE到etext
+        // DEBUG:虚拟化后所有代码卡死时，可检查 kernel_start 到 etext 的映射。
         // printfBlue("etext: %p\n", etext);
-        // printfBlue("KERNBASE: %p\n", KERNBASE);
-        // for(uint64 va = KERNBASE; va < (uint64)etext; va += PGSIZE)
+        // printfBlue("kernel_start: %p\n", kernel_base);
+        // for(uint64 va = kernel_base; va < (uint64)etext; va += PGSIZE)
         // {
         //     uint64 ppp= (uint64)pt.walk_addr(va);
         //     printfRed("va: %p, pa: %p\n", va, ppp);
@@ -2163,23 +2143,31 @@ namespace mem
         uint64 heap_start = mem::k_pmm.get_heap_area_start();
         uint64 heap_size = mem::k_pmm.get_heap_area_size();
         uint64 low_map_start_va = (uint64)etext;
-        if (!(heap_start >= low_map_start_va && heap_start + heap_size <= low_map_top))
+        if (heap_size == 0 || heap_start > UINT64_MAX - heap_size)
         {
-            kvmmap(pt, heap_start & (~(DMWIN_MASK)), heap_start, heap_size, PTE_R | PTE_W);
+            panic("[vmm] invalid heap mapping range: start=%p size=%p",
+                  heap_start, heap_size);
         }
-        
-        // Map DTB if it exists
-        if (k_dtb_addr != 0) {
-            uint64 dtb_size = DtbManager::get_dtb_size();
-            if (dtb_size == 0)
-            {
-                dtb_size = 0x10000;
-            }
-            dtb_size = PGROUNDUP(dtb_size);
-            uint64 dtb_va = k_dtb_addr & (~(DMWIN_MASK));
-            kvmmap(pt, dtb_va, k_dtb_addr, dtb_size, PTE_R | PTE_W);
-            printfGreen("[vmm] Mapped DTB at va=%p pa=%p, size=%p\n", dtb_va, k_dtb_addr, dtb_size);
+        const uint64 heap_end = heap_start + heap_size;
+        if (heap_start < low_map_start_va)
+        {
+            panic("[vmm] heap overlaps kernel text: heap=%p low-map-start=%p",
+                  heap_start, low_map_start_va);
         }
+        if (heap_end > low_map_top)
+        {
+            // heap 可能跨过包含内核的低端 RAM 边界。低端前缀已有 PTE，
+            // 这里只补尚未覆盖的后缀；重复映射会触发 map_pages remap panic。
+            const uint64 suffix_start = heap_start > low_map_top
+                                            ? heap_start
+                                            : low_map_top;
+            kvmmap(pt, suffix_start & (~(DMWIN_MASK)), suffix_start,
+                   heap_end - suffix_start, PTE_R | PTE_W);
+        }
+
+        // DtbManager 始终通过缓存 DMW 别名访问 LoongArch DTB。DMW 不依赖
+        // 页表，因而这里不能再把 DTB 的低地址重复映射一次：U-Boot 若把
+        // blob 放在已经覆盖的 RAM 内，重复 kvmmap 会把合法启动变成冲突 panic。
 
 #endif
         return pt;
@@ -2209,7 +2197,7 @@ namespace mem
 
             // 复制程序内容
             uint64 src_offset = i * PGSIZE;
-            uint64 copy_size = MIN(sz - src_offset, PGSIZE);
+            uint64 copy_size = util::min(sz - src_offset, PGSIZE);
             if (copy_size > 0 && src_offset < sz)
             {
                 memmove(mem, (void *)((uint64)src + src_offset), copy_size);
@@ -2248,7 +2236,7 @@ namespace mem
 
             // 复制程序内容
             uint64 src_offset = i * PGSIZE;
-            uint64 copy_size = MIN(sz - src_offset, PGSIZE);
+            uint64 copy_size = util::min(sz - src_offset, PGSIZE);
             if (copy_size > 0 && src_offset < sz)
             {
                 memmove(mem, (void *)((uint64)src + src_offset), copy_size);
