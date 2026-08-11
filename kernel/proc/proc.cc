@@ -127,6 +127,7 @@ namespace proc
         _wait_channel_registered = false;
         _killed = 0;     // 进程终止标志
         _exiting = false; // 尚未进入退出清理流程
+        _mm_cleanup_active = false;
         _deferred_reap = false;
         _xstate = 0;     // 进程退出状态码
         _parent_exit_signal = proc::ipc::signal::SIGCHLD;
@@ -152,6 +153,7 @@ namespace proc
         _trapframe = nullptr; // 用户态寄存器保存区
         _used_fpu = false;    // 默认按整数任务处理，第一次浮点指令异常后再启用 FPU 现场
         _used_lsx = false;    // LSX 与 FPR 共享低位，单独跟踪完整向量现场
+        invalidate_trapframe_mapping_cache();
         
         // 阶段1：创建统一内存管理器
         _memory_manager = nullptr; // 延迟到init()中创建，避免在构造函数中panic
@@ -264,6 +266,7 @@ namespace proc
         
         // 注意：不在init中创建ProcessMemoryManager
         // ProcessMemoryManager的创建延迟到具体需要时（fork、user_init、execve等）
+        invalidate_trapframe_mapping_cache();
         _memory_manager = nullptr;
     }
 
@@ -281,6 +284,7 @@ namespace proc
     {
         if (_memory_manager != nullptr)
         {
+            invalidate_trapframe_mapping_cache();
             _memory_manager->pagetable = pt;
         }
     }
@@ -489,8 +493,20 @@ namespace proc
     // 阶段1新增：清理ProcessMemoryManager
     void Pcb::cleanup_memory_manager()
     {
+        // mm 即将被释放或从 PCB 脱离；即使下面发现空/坏指针，也不能让
+        // PCB 复用时继承旧页表的 trapframe 绑定。
+        invalidate_trapframe_mapping_cache();
         if (_memory_manager != nullptr)
         {
+            // 不能借用 _exiting 表示这个区间：execve 会在正常进程中
+            // 销毁旧映像，registry pin 或文件后端清理又可能临时 sleep。
+            // 调度器换回该内核清理上下文时必须跳过 enter_mm(old_mm)。
+            if (_mm_cleanup_active)
+            {
+                panic("cleanup_memory_manager: recursive mm cleanup pid=%d tid=%d mm=%p",
+                      _pid, _tid, _memory_manager);
+            }
+            _mm_cleanup_active = true;
             // 当前任务切换/退出前撤销本 CPU 的 mm 活跃标记；其它仍运行同一
             // CLONE_VM 地址空间的 CPU 继续保留在目标掩码中。
             if (Cpu::get_cpu()->get_cur_proc() == this)
@@ -502,6 +518,7 @@ namespace proc
                 printfRed("[cleanup_memory_manager] 检测到异常 mm 指针，直接丢弃: pcb=%p pid=%d tid=%d mm=%p\n",
                           this, _pid, _tid, _memory_manager);
                 _memory_manager = nullptr;
+                _mm_cleanup_active = false;
                 return;
             }
 
@@ -511,16 +528,19 @@ namespace proc
                 shm::k_smm.detach_all_for_process(this, true, false);
             }
 
-            // 直接调用 free_all_memory()，它内部会检查和减少引用计数
-            _memory_manager->free_all_memory();
-            
-            // free_all_memory() 减少了引用计数，如果原来的引用计数<=1，则资源已被释放
-            // 现在检查当前引用计数，如果<=0则删除对象
-            if (_memory_manager->get_ref_count() <= 0)
-            {
-                delete _memory_manager;
-            }
+            ProcessMemoryManager *released_mm = _memory_manager;
+            // 先从 PCB 摘掉指针，再原子归还引用。最终清理者会扫描进程池
+            // 校验是否还有活跃持有者；若先 fetch_sub、后清指针，并发退出的
+            // 倒数第二个线程会被误算成“引用计数漂移”，把已经归零的 mm
+            // 重新抬成 1，最终无人负责销毁。
             _memory_manager = nullptr;
+            // 只有本次 fetch_sub 从 1 降到 0 的调用者拥有删除权。不能在这里
+            // 重新读取共享 ref_count，否则会删除另一颗 CPU 正在最终清理的 mm。
+            if (released_mm->free_all_memory())
+            {
+                delete released_mm;
+            }
+            _mm_cleanup_active = false;
         }
     }
 
@@ -532,6 +552,7 @@ namespace proc
         
         // 设置新的内存管理器
         _memory_manager = mm;
+        invalidate_trapframe_mapping_cache();
     }
 
     void Pcb::cleanup_ofile()

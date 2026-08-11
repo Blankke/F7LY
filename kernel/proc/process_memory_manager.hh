@@ -30,6 +30,11 @@
 #include "mem/loongarch/pagetable.hh"
 #endif
 
+namespace fs
+{
+    struct FilePageCacheIdentity;
+}
+
 // 结构体定义
 namespace proc
 {
@@ -110,6 +115,9 @@ namespace proc
         uint64 tlb_generation = 0;
         uint64 tlb_active_cpu_mask = 0;
         uint64 tlb_seen_generation[NUMCPU]{};
+        // 只在最后引用归零且 tlb_active_cpu_mask==0 后置位。置位后撤 PTE
+        // 不逐批 shootdown；user_asid 会先退休，直到全核屏障后才允许复用。
+        bool inactive_final_teardown = false;
         // 基础页表创建完成后，trampoline/sig-trampoline 在地址空间生命周期内
         // 保持存在；usertrapret 只需在首次初始化/修复时检查，不能每次返回用户态
         // 都重新 walk 固定高地址页表。
@@ -311,6 +319,15 @@ namespace proc
         vma *find_next_vma(const vma *entry);
         const vma *find_next_vma(const vma *entry) const;
         int fault_page(uint64 va, int access_type);
+        /** PCB 发布完整 mm 后登记；只在最后引用销毁前摘除。 */
+        void publish_file_invalidation_registry();
+        void retire_file_invalidation_registry();
+        /** 仅供全局 truncate 扫描器在 registry lock 下 pin。 */
+        void pin_file_invalidation();
+        void unpin_file_invalidation();
+        /** 调用时不持有 registry/cache spinlock，内部获取 memory_lock。 */
+        void zap_file_mappings_after_shrink(const fs::FilePageCacheIdentity &identity,
+                                            uint64 new_size);
         bool reindex_vma_slot(vma &entry, uint64 old_addr);
         bool insert_vma_slot(vma &entry);
         void erase_vma_slot(vma &entry, uint64 old_addr);
@@ -396,7 +413,18 @@ namespace proc
          * 3. 堆内存
          * 4. 页表结构
          */
-        void free_all_memory();
+        /**
+         * @brief 归还一个业务引用，并在本次归还成为最后引用时释放全部内存。
+         * @return true 仅表示当前调用者完成了最终清理、随后应 delete 本对象；
+         *         false 表示仍有其它 PCB 持有该地址空间。
+         *
+         * 调用者必须先从所属 PCB 摘掉 mm 指针，再调用本函数；
+         * 最终清理会扫描进程池，该顺序保证扫描只看到尚未归还的引用。
+         * 删除权必须使用本次原子 release 的返回值，不能在函数返回后重新读取
+         * ref_count 判断；其它 CPU 可能已经同时把最后一个引用降为 0，但仍在
+         * VMA/页表清理过程中。
+         */
+        bool free_all_memory();
 
         /**
          * @brief 紧急内存清理（用于错误恢复）
@@ -592,6 +620,10 @@ namespace proc
         // copyin/copyout 可能在已经持锁的 mmap/exec 路径中补齐惰性页。
         // 深度只由当前锁所有者访问，SleepLock 负责不同线程之间的可见性。
         uint memory_lock_depth = 0;
+        // truncate 扫描不能借用 mm 业务 ref_count，否则最后一个 PCB
+        // 退出后无人触发清理。因此单独 pin，registry 摘除后等待它归零。
+        eastl::atomic<uint32> file_invalidation_pins{0};
+        bool file_invalidation_registered = false; // 只由 registry spinlock 保护
 
     private:
         /****************************************************************************************
@@ -606,6 +638,8 @@ namespace proc
         bool is_page_mapped(uint64 va);
         void free_vma_entry(vma *entry, bool check_validity);
         void unmap_vma_pages(const vma &entry, uint64 va_start, uint64 va_end, bool check_validity);
+        void begin_inactive_final_teardown();
+        void reassert_inactive_final_teardown();
         void unmap_heap_pages_in_range(const vma &entry, uint64 start, uint64 end);
         bool heap_growth_conflicts_with_mapping(uint64 start, uint64 end) const;
         bool ensure_heap_metadata_for_range(uint64 start, uint64 end);
@@ -656,5 +690,13 @@ namespace proc
 
     // 类型别名，便于后续重命名为MemoryDescriptor
     using MemoryDescriptor = ProcessMemoryManager;
+
+    /**
+     * truncate 收缩成功后撤销所有活跃 mm 中该 inode 的已驻留页。
+     * 保留 VMA，使后续 fault 按新 EOF 返回 SIGBUS/重读边界页。
+     */
+    void invalidate_resident_file_mappings_after_shrink(
+        const fs::FilePageCacheIdentity &identity,
+        uint64 new_size);
 
 } // namespace proc

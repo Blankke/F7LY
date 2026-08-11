@@ -43,6 +43,7 @@ namespace fs
 			void reset_write_combine_locked();
 		void mark_write_combine_dirty_locked();
 		void invalidate_read_snapshot_locked();
+		void invalidate_global_page_cache_range_locked(uint64 offset, uint64 length);
 		void release_clean_write_combine_buffer_locked();
 		bool can_use_read_snapshot_locked(long off) const;
 		bool populate_read_snapshot_locked();
@@ -88,6 +89,9 @@ namespace fs
 		virtual off_t lseek(off_t offset, int whence) override;
 		virtual int flush_visibility_state() override;
 		virtual void invalidate_cached_file_data() override;
+		virtual void invalidate_cached_file_range(uint64 offset, uint64 length) override;
+		virtual bool get_file_page_cache_identity(FilePageCacheIdentity &identity) const override;
+		virtual bool file_page_cache_is_clean() const override;
 
 		using ubuf = mem::UserspaceStream;
 		size_t read_sub_dir(ubuf &dst);

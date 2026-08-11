@@ -8,6 +8,7 @@
 #include "klib.hh"
 #include "printer.hh"
 #include "physical_memory_manager.hh"
+#include "libs/perf_diag.hh"
 namespace mem
 {
     PageTable k_pagetable;
@@ -88,6 +89,7 @@ namespace mem
     // walk函数用于在页表中查找一个虚拟地址对应的物理地址
     Pte PageTable::walk(uint64 va, bool alloc)
     {
+        F7LY_PERF_ADD(PageTableWalk, 1);
         // printfRed("walk: %p\n", va);
         // for (int level = 2; level > 0; level--)
         // {

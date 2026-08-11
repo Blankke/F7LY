@@ -55,8 +55,9 @@ Makefile 事实：
   会直接报错。
 - 可用画像为 `riscv-qemu`、`loongarch-qemu`、`riscv-visionfive2`、`loongarch-2k1000`。
 - `run`、`shell`、`debug` 只接受 QEMU 画像；实机画像只使用 `make build PROFILE=...` 生成产物。
-- `run` 使用初赛评测盘，`shell` 使用决赛完整 rootfs；只有真正启动本地
-  QEMU 的入口才检查或下载镜像，`build/all` 不依赖磁盘。
+- `run` 默认使用初赛评测盘；显式传 `QEMU_DISK=final` 可运行决赛完整
+  rootfs，`shell` 固定使用决赛盘。只有真正启动本地 QEMU 的入口才检查
+  或下载镜像，`build/all` 不依赖磁盘。
 - 输出目录以完整画像命名：`build/riscv-qemu/`、
   `build/riscv-visionfive2/`、`build/loongarch-qemu/`、
   `build/loongarch-2k1000/`；shell 模式在目录名后追加 `-shell`。
@@ -127,11 +128,11 @@ log="logs/run/output_r_${ts}_final-2026_QEMU_MEM-8G_QEMU_SMP-8_timeout-40m.txt"
 {
   echo "run_at=${ts}"
   echo "arch=riscv"
-  echo "cmd=timeout 40m make run PROFILE=riscv-qemu QEMU_MEM=8G QEMU_SMP=8"
+  echo "cmd=timeout 40m make run PROFILE=riscv-qemu QEMU_DISK=final QEMU_MEM=8G QEMU_SMP=8"
   echo "git_branch=$(git branch --show-current 2>/dev/null || true)"
   echo "git_head=$(git rev-parse --short HEAD 2>/dev/null || true)"
   echo "---- output ----"
-  timeout 40m make run PROFILE=riscv-qemu QEMU_MEM=8G QEMU_SMP=8
+  timeout 40m make run PROFILE=riscv-qemu QEMU_DISK=final QEMU_MEM=8G QEMU_SMP=8
   echo "exit_code=$?"
 } > "$log" 2>&1
 echo "$log"
@@ -146,11 +147,11 @@ log="logs/run/output_l_${ts}_final-2026_QEMU_MEM-8G_QEMU_SMP-8_timeout-40m.txt"
 {
   echo "run_at=${ts}"
   echo "arch=loongarch"
-  echo "cmd=timeout 40m make run PROFILE=loongarch-qemu QEMU_MEM=8G QEMU_SMP=8"
+  echo "cmd=timeout 40m make run PROFILE=loongarch-qemu QEMU_DISK=final QEMU_MEM=8G QEMU_SMP=8"
   echo "git_branch=$(git branch --show-current 2>/dev/null || true)"
   echo "git_head=$(git rev-parse --short HEAD 2>/dev/null || true)"
   echo "---- output ----"
-  timeout 40m make run PROFILE=loongarch-qemu QEMU_MEM=8G QEMU_SMP=8
+  timeout 40m make run PROFILE=loongarch-qemu QEMU_DISK=final QEMU_MEM=8G QEMU_SMP=8
   echo "exit_code=$?"
 } > "$log" 2>&1
 echo "$log"
@@ -219,6 +220,10 @@ QEMU 运行参数由 Makefile 管理：
   `images/oscomp-preliminary-riscv64.img`。
 - `make run PROFILE=loongarch-qemu`：初赛盘
   `images/oscomp-preliminary-loongarch64.img`。
+- `make run PROFILE=riscv-qemu QEMU_DISK=final`：RISC-V 决赛盘
+  `images/oscomp-final-riscv64.img`。
+- `make run PROFILE=loongarch-qemu QEMU_DISK=final`：LoongArch 决赛盘
+  `images/oscomp-final-loongarch64.img`。
 - `make shell PROFILE=riscv-qemu`：决赛盘
   `images/oscomp-final-riscv64.img`。
 - `make shell PROFILE=loongarch-qemu`：决赛盘
@@ -227,6 +232,9 @@ QEMU 运行参数由 Makefile 管理：
 - 默认内存：`QEMU_MEM ?= 8G`
 - 调试内存：`QEMU_DEBUG_MEM ?= 8G`
 - 默认 CPU：`QEMU_SMP ?= 8`
+- 默认磁盘套件：`QEMU_DISK ?= preliminary`，定义在 `mk/qemu.mk`。若希望
+  项目长期默认跑决赛盘，只修改这里为 `QEMU_DISK ?= final`；不要替换
+  `images/` 中的初赛文件。
 - `make run PROFILE=<qemu画像>` 默认传入 `QEMU_RUN_SNAPSHOT ?= -snapshot`，防止自动回归污染评测 sdcard 镜像；如需写回可显式传 `QEMU_RUN_SNAPSHOT=`。
 - `make shell PROFILE=<qemu画像>` 默认传入空的 `QEMU_SHELL_SNAPSHOT`，会写回独立 shell rootfs 镜像；如需临时 shell 可显式传 `QEMU_SHELL_SNAPSHOT=-snapshot`。
 - `make debug PROFILE=<qemu画像>` 默认传入 `QEMU_DEBUG_SNAPSHOT ?= -snapshot`，调试过程中不会写回磁盘镜像；确实需要观察持久化写入时再显式传 `QEMU_DEBUG_SNAPSHOT=`。
@@ -245,8 +253,8 @@ QEMU 运行参数由 Makefile 管理：
 只准备镜像、不启动 QEMU：
 
 ```bash
-make prepare-image PROFILE=riscv-qemu MODE=evaluation
-make prepare-image PROFILE=loongarch-qemu MODE=shell
+make prepare-image PROFILE=riscv-qemu QEMU_DISK=preliminary
+make prepare-image PROFILE=loongarch-qemu QEMU_DISK=final
 ```
 
 GDB：

@@ -5,6 +5,7 @@
 #include "hal/riscv/sbi.hh"
 #include "hal/irq.hh"
 #include "hal/tlb_shootdown.hh"
+#include "libs/perf_diag.hh"
 #include "param.h"
 #include "printer.hh"
 #include "proc/proc.hh"
@@ -96,6 +97,12 @@ int trap_manager::devintr()
     return 3;
   }
 
+  if (scause == 0x800000000000000dL)
+  {
+    // Sscofpmf 本地计数器溢出中断；采样和重新装载由 perfdiag 统一处理。
+    return 4;
+  }
+
   if ((scause & 0x8000000000000000L) &&
       (scause & 0xff) == 9)
   {
@@ -156,7 +163,7 @@ void trap_manager::timertick()
 
 // 处理内核态的中断
 // 支持嵌套中断
-void trap_manager::kerneltrap()
+void trap_manager::kerneltrap(const uint64 *saved_frame)
 {
   //   printfMagenta("into kerneltrap\n");
   int which_dev = 0;
@@ -197,6 +204,16 @@ void trap_manager::kerneltrap()
           scause, r_sepc(), r_stval(), sstatus);
   }
 
+  if (which_dev == 2)
+  {
+    // kernelvec 保存的 s0/fp 位于第 7 个 64 位槽；sepc 是原始被中断 PC。
+    perfdiag::on_timer_interrupt(true, sepc, saved_frame != nullptr ? saved_frame[7] : 0);
+  }
+  else if (which_dev == 4)
+  {
+    perfdiag::on_pmu_interrupt(true, sepc, saved_frame != nullptr ? saved_frame[7] : 0);
+  }
+
   if (which_dev == 2 && Cpu::get_cpu()->get_cur_proc() != nullptr &&
       Cpu::get_cpu()->get_cur_proc()->_state == proc::RUNNING &&
       !Cpu::get_cpu()->get_cur_proc()->_exiting)
@@ -216,6 +233,7 @@ void trap_manager::kerneltrap()
 
 void trap_manager::usertrap()
 {
+  F7LY_PERF_ADD(UserTrap, 1);
   // printfMagenta("into usertrap\n");
   int which_dev = 0;
   if ((r_sstatus() & SSTATUS_SPP) != 0)
@@ -320,6 +338,16 @@ void trap_manager::usertrap()
     }
   }
 
+  if (which_dev == 2)
+  {
+    // 本轮只分析内核执行域，用户态 timer 命中单独计入 skipped。
+    perfdiag::on_timer_interrupt(false, p->_trapframe->epc, 0);
+  }
+  else if (which_dev == 4)
+  {
+    perfdiag::on_pmu_interrupt(false, p->_trapframe->epc, 0);
+  }
+
   if (which_dev == 2 && p->_last_user_tick > 0 && cur_tick == p->_last_user_tick)
   {
     // 用户态时钟中断是在 devintr()/timertick() 里才把 ticks 加一。
@@ -381,73 +409,92 @@ void trap_manager::usertrapret()
           p ? (int)p->_state : -1,
           p ? (int)p->_exiting : -1);
   }
-  if (!p->get_memory_manager()->ensure_special_mappings())
+  proc::ProcessMemoryManager *mm = p->get_memory_manager();
+  if (p->_exiting || mm->inactive_final_teardown)
   {
-    panic("usertrapret: failed to ensure special mappings pid=%d tid=%d state=%d pt=%p",
+    // 退出清理可能在文件回写时 sleep；被唤醒后只能继续内核清理，绝不能
+    // 重新发布 active mm 或返回已开始拆除的用户页表。
+    panic("usertrapret: refusing exiting/final-teardown task pid=%d tid=%d exiting=%d final=%d mm=%p",
           p->_pid,
           p->_tid,
-          (int)p->_state,
-          (void *)p->get_pagetable()->get_base());
+          (int)p->_exiting,
+          (int)mm->inactive_final_teardown,
+          mm);
   }
-
   // CLONE_VM 线程共享用户页表，但每个 PCB 有自己的 trapframe 物理页。
   // 固定复用 TRAPFRAME 会让两个核同时返回用户态时互相拆掉对方的映射。
   // 因此按 PCB 槽位分配独立的高地址页，并把实际地址传给 trampoline。
   intr_off();
-  const uint64 user_trapframe_va = USER_TRAPFRAME(p->get_global_id());
-
-  // 同一线程的 trapframe PTE 在生命周期内保持不变；只有 PCB 槽位复用时
-  // 才需要替换。首次多个 CLONE_VM 线程同时返回时，页表层级创建必须串行化，
-  // 否则两个 CPU 可能互相覆盖同一个父级 PTE。
   mem::PageTable *user_pt = p->get_pagetable();
+  const uint64 user_pt_base = user_pt->get_base();
+  const uint64 user_trapframe_va = USER_TRAPFRAME(p->get_global_id());
   const uint64 expected_trapframe_pa = PGROUNDDOWN(
       riscv::virt_to_phy_address(reinterpret_cast<uint64>(p->get_trapframe())));
-  mem::Pte trapframe_pte = user_pt->walk(user_trapframe_va, false);
-  bool trapframe_mapping_matches =
-      !trapframe_pte.is_null() && trapframe_pte.is_valid() &&
-      reinterpret_cast<uint64>(trapframe_pte.pa()) == expected_trapframe_pa;
 
-  if (!trapframe_mapping_matches)
+  // 同一 PCB 的 mm、页表根和 trapframe 物理页稳定后，这个保留 PTE 不会被
+  // 普通 mmap/munmap 改动。仅首次绑定、exec 换 mm 或 PCB 复用时进入慢路径；
+  // CLONE_VM 首次并发建页表仍由全局更新锁串行化。
+  F7LY_PERF_ADD(TrapframeMapCheck, 1);
+  if (!p->trapframe_mapping_cache_matches(mm,
+                                          user_pt_base,
+                                          expected_trapframe_pa))
   {
     mem::k_vmm.lock_page_table_updates();
-    trapframe_pte = user_pt->walk(user_trapframe_va, false);
-    trapframe_mapping_matches =
-        !trapframe_pte.is_null() && trapframe_pte.is_valid() &&
-        reinterpret_cast<uint64>(trapframe_pte.pa()) == expected_trapframe_pa;
+    const bool special_mappings_ok = mm->ensure_special_mappings();
     bool mapped = true;
-    if (!trapframe_mapping_matches)
+    if (special_mappings_ok)
     {
-      mem::k_vmm.vmunmap(*user_pt, user_trapframe_va, 1, 0);
-      mapped = mem::k_vmm.map_pages(*user_pt,
-                                    user_trapframe_va,
-                                    PGSIZE,
-                                    (uint64)p->get_trapframe(),
-                                    riscv::PteEnum::pte_readable_m |
-                                        riscv::PteEnum::pte_writable_m);
+      mem::Pte trapframe_pte = user_pt->walk(user_trapframe_va, false);
+      const bool trapframe_mapping_matches =
+          !trapframe_pte.is_null() && trapframe_pte.is_valid() &&
+          reinterpret_cast<uint64>(trapframe_pte.pa()) == expected_trapframe_pa;
+      if (!trapframe_mapping_matches)
+      {
+        F7LY_PERF_ADD(TrapframeRemap, 1);
+        mem::k_vmm.vmunmap(*user_pt, user_trapframe_va, 1, 0);
+        mapped = mem::k_vmm.map_pages(*user_pt,
+                                      user_trapframe_va,
+                                      PGSIZE,
+                                      (uint64)p->get_trapframe(),
+                                      riscv::PteEnum::pte_readable_m |
+                                          riscv::PteEnum::pte_writable_m);
+      }
     }
     mem::k_vmm.unlock_page_table_updates();
+    if (!special_mappings_ok)
+    {
+      panic("usertrapret: failed to ensure special mappings pid=%d tid=%d state=%d pt=%p",
+            p->_pid,
+            p->_tid,
+            (int)p->_state,
+            (void *)user_pt_base);
+    }
     if (!mapped)
     {
       panic("usertrapret: failed to map trapframe");
     }
-  }
-  mem::Pte pte = p->get_pagetable()->walk(TRAMPOLINE, 0);
-  if (pte.is_null() || pte.is_valid() == 0)
-  {
-    proc::ProcessMemoryManager *mm = p->get_memory_manager();
-    mem::PageTable *pt = p->get_pagetable();
-    uint64 pt_base = (pt != nullptr) ? pt->get_base() : 0;
-    panic("trampoline not mapped in user pagetable! pid=%d tid=%d state=%d signal=%d mm=%p pt=%p pt_base=%p trapframe=%p epc=%p sp=%p",
-          p ? p->_pid : -1,
-          p ? p->_tid : -1,
-          p ? (int)p->_state : -1,
-          p ? p->_signal : -1,
-          mm,
-          pt,
-          (void *)pt_base,
-          p ? p->get_trapframe() : nullptr,
-          p ? (void *)p->_trapframe->epc : nullptr,
-          p ? (void *)p->_trapframe->sp : nullptr);
+
+#if defined(F7LY_TRAP_RETURN_DIAGNOSTICS) && F7LY_TRAP_RETURN_DIAGNOSTICS
+    // 诊断构建可在生命周期边界额外核对 trampoline；默认构建不在每次
+    // syscall 返回时软件遍历固定高地址页表。
+    mem::Pte trampoline_pte = user_pt->walk(TRAMPOLINE, false);
+    if (trampoline_pte.is_null() || !trampoline_pte.is_valid())
+    {
+      panic("trampoline not mapped in user pagetable! pid=%d tid=%d state=%d signal=%d mm=%p pt=%p pt_base=%p trapframe=%p epc=%p sp=%p",
+            p->_pid,
+            p->_tid,
+            (int)p->_state,
+            p->_signal,
+            mm,
+            user_pt,
+            (void *)user_pt_base,
+            p->get_trapframe(),
+            (void *)p->_trapframe->epc,
+            (void *)p->_trapframe->sp);
+    }
+#endif
+
+    p->cache_trapframe_mapping(mm, user_pt_base, expected_trapframe_pa);
   }
 
   // we're about to switch the destination of traps from

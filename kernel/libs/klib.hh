@@ -61,9 +61,6 @@ extern "C++" {
 	// void   _blockingputs(const char *);
 	// void   _nonblockingputs(const char *);
 
-	//libm
-	float ceilf( float x );
-
 }
 #endif
 

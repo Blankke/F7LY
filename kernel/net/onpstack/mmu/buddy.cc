@@ -426,10 +426,10 @@ BOOL buddy_free(void *pvStart)
     return TRUE;
 }
 
-FLOAT buddy_usage(void)
+UINT buddy_used_bytes(void)
 {
     INT i;
-    UINT unUsedPageSize = 0;
+    UINT unUsedBytes = 0;
 
     os_critical_init();
 
@@ -439,19 +439,19 @@ FLOAT buddy_usage(void)
         PST_BUDDY_PAGE pstNextUsedPage = l_staArea[i].pstUsed;
         while (pstNextUsedPage)
         {
-            unUsedPageSize += l_staArea[i].unPageSize;
+            unUsedBytes += l_staArea[i].unPageSize;
             pstNextUsedPage = pstNextUsedPage->pstNext;
         }
     }
     os_exit_critical();
 
-    return (FLOAT)unUsedPageSize / (FLOAT)BUDDY_MEM_SIZE;
+    return unUsedBytes;
 }
 
-FLOAT buddy_usage_details(UINT *punTotalBytes, UINT *punUsedBytes, UINT *punMaxFreedPageSize, UINT *punMinFreedPageSize)
+void buddy_usage_details(UINT *punTotalBytes, UINT *punUsedBytes, UINT *punMaxFreedPageSize, UINT *punMinFreedPageSize)
 {
     INT i;
-    UINT unUsedPageSize = 0;
+    UINT unUsedBytes = 0;
     UINT unMaxFreedPageSize = BUDDY_PAGE_SIZE, unMinFreedPageSize = BUDDY_PAGE_SIZE;
 
     *punTotalBytes = BUDDY_MEM_SIZE;
@@ -464,7 +464,7 @@ FLOAT buddy_usage_details(UINT *punTotalBytes, UINT *punUsedBytes, UINT *punMaxF
         PST_BUDDY_PAGE pstNextPage = l_staArea[i].pstUsed;
         while (pstNextPage)
         {
-            unUsedPageSize += l_staArea[i].unPageSize;
+            unUsedBytes += l_staArea[i].unPageSize;
             pstNextPage = pstNextPage->pstNext;
         }
 
@@ -480,9 +480,9 @@ FLOAT buddy_usage_details(UINT *punTotalBytes, UINT *punUsedBytes, UINT *punMaxF
     }
     os_exit_critical();
 
-    *punUsedBytes = unUsedPageSize;
+    *punUsedBytes = unUsedBytes;
 
-    if (unUsedPageSize < BUDDY_MEM_SIZE)
+    if (unUsedBytes < BUDDY_MEM_SIZE)
     {
         *punMaxFreedPageSize = unMaxFreedPageSize;
         *punMinFreedPageSize = unMinFreedPageSize;
@@ -492,6 +492,4 @@ FLOAT buddy_usage_details(UINT *punTotalBytes, UINT *punUsedBytes, UINT *punMaxF
         *punMaxFreedPageSize = 0;
         *punMinFreedPageSize = 0;
     }
-
-    return (FLOAT)unUsedPageSize / (FLOAT)BUDDY_MEM_SIZE;
 }

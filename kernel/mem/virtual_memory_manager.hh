@@ -24,6 +24,14 @@ namespace mem
 	inline constexpr uint64 k_riscv_pte_cow = 1UL << 8;
 #endif
 
+	enum class UnmapTlbMode : uint8
+	{
+		Invalidate,
+		// 仅允许 ProcessMemoryManager 在最后引用归零、活跃 CPU 掩码为空后使用。
+		// 旧 ASID 必须保持退休状态，直到下一次全核 TLB 屏障后才可复用。
+		SkipInactiveFinalTeardown,
+	};
+
 	class VirtualMemoryManager
 	{
 	private:
@@ -64,7 +72,23 @@ namespace mem
 		/// @param va virtual address
 		/// @param npages num of pages to unmap
 		/// @param do_free free physical pages?
-		void vmunmap( PageTable &pt, uint64 va, uint64 npages, int do_free );
+		void vmunmap(PageTable &pt,
+		              uint64 va,
+		              uint64 npages,
+		              int do_free,
+		              UnmapTlbMode tlb_mode = UnmapTlbMode::Invalidate);
+
+		/**
+		 * @brief 撤销最多 256 个不连续虚拟页，并把 TLB/PMM 操作合并成一批。
+		 *
+		 * addresses 可以无序且包含尚未驻留的页；有效叶子 PTE 会先全部清除，
+		 * 随后只做一次保守范围失效，再在一次 PMM 锁内归还物理页。
+		 */
+		void vmunmap_sparse(PageTable &pt,
+		                    const uint64 *addresses,
+		                    uint32 count,
+		                    int do_free,
+		                    UnmapTlbMode tlb_mode = UnmapTlbMode::Invalidate);
 
 		PageTable vm_create();
 

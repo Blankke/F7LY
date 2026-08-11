@@ -176,6 +176,7 @@ namespace proc
         bool _wait_channel_registered = false;
         int _killed;           // 进程终止标志位，非零表示进程被标记为终止
         bool _exiting;         // 已进入退出清理流程，禁止 timer 抢占式 yield
+        bool _mm_cleanup_active; // 正在脱离旧 mm；exec 换映像期间也可能 sleep
         // 退出任务由 scheduler 在切回后、仍持有 PCB 锁时完成回收。
         bool _deferred_reap;
         int _xstate;           // 进程退出状态码，供父进程通过wait()系统调用获取
@@ -213,6 +214,12 @@ namespace proc
         bool _used_fpu;        // LoongArch 懒 FPU：线程第一次触发浮点禁用异常后才保存/恢复 FPU 现场
         bool _used_lsx;        // LoongArch 懒 LSX：启用后必须保存完整 128 位向量现场
     private:
+        // trap 返回热路径缓存：只有 mm、页表根和 trapframe 物理页三者都
+        // 未变化时，USER_TRAPFRAME(_global_id) 的 PTE 才可跳过软件 walk。
+        // PCB 仅会在持有自身锁时被单 CPU 执行，因此这里不需要原子字段。
+        class ProcessMemoryManager *_trapframe_mapping_mm;
+        uint64 _trapframe_mapping_pagetable_base;
+        uint64 _trapframe_mapping_pa;
         // 阶段1：统一内存管理器（替代分散的内存字段）
         class ProcessMemoryManager* _memory_manager;
 
@@ -328,7 +335,11 @@ namespace proc
         void cleanup_memory_manager(); // 释放ProcessMemoryManager资源
         void set_memory_manager(ProcessMemoryManager* mm); // 设置新的内存管理器
         // 仅重置内存管理器指针，不执行 cleanup；用于 PCB 复用或失败回滚时切断历史脏指针。
-        void reset_memory_manager_ptr(ProcessMemoryManager* mm = nullptr) { _memory_manager = mm; }
+        void reset_memory_manager_ptr(ProcessMemoryManager* mm = nullptr)
+        {
+            invalidate_trapframe_mapping_cache();
+            _memory_manager = mm;
+        }
         ProcessMemoryManager* get_memory_manager() { return _memory_manager; } // 获取内存管理器
         uint32 get_personality() const { return _personality; }
         void set_personality(uint32 personality) { _personality = personality; }
@@ -397,7 +408,37 @@ namespace proc
 
         TrapFrame *get_trapframe() { return _trapframe; }
         const TrapFrame *get_trapframe() const { return _trapframe; }
-        void set_trapframe(TrapFrame *tf) { _trapframe = tf; }
+        void set_trapframe(TrapFrame *tf)
+        {
+            if (_trapframe != tf)
+            {
+                invalidate_trapframe_mapping_cache();
+                _trapframe = tf;
+            }
+        }
+
+        bool trapframe_mapping_cache_matches(ProcessMemoryManager *mm,
+                                             uint64 pagetable_base,
+                                             uint64 trapframe_pa) const
+        {
+            return _trapframe_mapping_mm == mm &&
+                   _trapframe_mapping_pagetable_base == pagetable_base &&
+                   _trapframe_mapping_pa == trapframe_pa;
+        }
+        void cache_trapframe_mapping(ProcessMemoryManager *mm,
+                                     uint64 pagetable_base,
+                                     uint64 trapframe_pa)
+        {
+            _trapframe_mapping_mm = mm;
+            _trapframe_mapping_pagetable_base = pagetable_base;
+            _trapframe_mapping_pa = trapframe_pa;
+        }
+        void invalidate_trapframe_mapping_cache()
+        {
+            _trapframe_mapping_mm = nullptr;
+            _trapframe_mapping_pagetable_base = 0;
+            _trapframe_mapping_pa = 0;
+        }
 
         uint64 get_kstack() const { return _kstack; }
         void set_kstack(uint64 kstack) { _kstack = kstack; }

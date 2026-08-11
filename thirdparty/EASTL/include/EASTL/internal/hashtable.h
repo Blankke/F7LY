@@ -406,6 +406,36 @@ namespace eastl
 	struct default_ranged_hash{ };
 
 
+	/// hash_load_factor
+	///
+	/// 内核不能在可抢占路径中使用硬件浮点寄存器。哈希表负载因子因此用
+	/// 精确的无符号有理数表示；公开查询接口保留原有方法名，并返回该比值。
+	/// scaled() 可在不引入浮点运算的前提下转换为调用方指定倍率的定点数。
+	///
+	class hash_load_factor
+	{
+	public:
+		constexpr hash_load_factor(uint32_t nNumerator = 0, uint32_t nDenominator = 1)
+			: mNumerator(nNumerator), mDenominator(nDenominator ? nDenominator : 1) { }
+
+		constexpr uint32_t numerator() const
+			{ return mNumerator; }
+
+		constexpr uint32_t denominator() const
+			{ return mDenominator; }
+
+		constexpr uint32_t scaled(uint32_t nScale) const
+		{
+			const uint64_t value = ((uint64_t)mNumerator * nScale) / mDenominator;
+			return value > 0xffffffffu ? 0xffffffffu : (uint32_t)value;
+		}
+
+	private:
+		uint32_t mNumerator;
+		uint32_t mDenominator;
+	};
+
+
 	/// prime_rehash_policy
 	///
 	/// Default value for rehash policy. Bucket size is (usually) the
@@ -413,17 +443,27 @@ namespace eastl
 	///
 	struct EASTL_API prime_rehash_policy
 	{
+	private:
+		hash_load_factor mMaxLoadFactor;
+		hash_load_factor mGrowthFactor;
+
 	public:
-		float            mfMaxLoadFactor;
-		float            mfGrowthFactor;
 		mutable uint32_t mnNextResize;
 
-	public:
-		prime_rehash_policy(float fMaxLoadFactor = 1.f)
-			: mfMaxLoadFactor(fMaxLoadFactor), mfGrowthFactor(2.f), mnNextResize(0) { }
+		prime_rehash_policy(hash_load_factor maxLoadFactor = hash_load_factor(1, 1))
+			: mMaxLoadFactor(maxLoadFactor.numerator() ? maxLoadFactor.numerator() : 1,
+				                 maxLoadFactor.denominator()),
+			  mGrowthFactor(2, 1),
+			  mnNextResize(0) { }
 
-		float GetMaxLoadFactor() const
-			{ return mfMaxLoadFactor; }
+		explicit prime_rehash_policy(uint32_t nWholeMaxLoadFactor)
+			: prime_rehash_policy(hash_load_factor(nWholeMaxLoadFactor, 1)) { }
+
+		prime_rehash_policy(float) = delete;
+		prime_rehash_policy(double) = delete;
+
+		hash_load_factor GetMaxLoadFactor() const
+			{ return mMaxLoadFactor; }
 
 		/// Return a bucket count no greater than nBucketCountHint, 
 		/// Don't update member variables while at it.
@@ -478,19 +518,27 @@ namespace eastl
 	{
 		// Returns the max load factor, which is the load factor beyond
 		// which we rebuild the container with a new bucket count.
-		float get_max_load_factor() const
+		hash_load_factor get_max_load_factor() const
 		{
 			const Hashtable* const pThis = static_cast<const Hashtable*>(this);
 			return pThis->rehash_policy().GetMaxLoadFactor();
 		}
 
-		// If you want to make the hashtable never rehash (resize), 
-		// set the max load factor to be a very high number (e.g. 100000.f).
-		void set_max_load_factor(float fMaxLoadFactor)
+		// If you want to make the hashtable never rehash (resize),
+		// set the max load factor to be a very high whole number (e.g. 100000).
+		void set_max_load_factor(hash_load_factor maxLoadFactor)
 		{
 			Hashtable* const pThis = static_cast<Hashtable*>(this);
-			pThis->rehash_policy(prime_rehash_policy(fMaxLoadFactor));    
+			pThis->rehash_policy(prime_rehash_policy(maxLoadFactor));
 		}
+
+		void set_max_load_factor(uint32_t nWholeMaxLoadFactor)
+		{
+			set_max_load_factor(hash_load_factor(nWholeMaxLoadFactor, 1));
+		}
+
+		void set_max_load_factor(float) = delete;
+		void set_max_load_factor(double) = delete;
 	};
 
 
@@ -804,7 +852,7 @@ namespace eastl
 	///////////////////////////////////////////////////////////////////////
 	/// Note:
 	/// If you want to make a hashtable never increase its bucket usage,
-	/// call set_max_load_factor with a very high value such as 100000.f.
+	/// call set_max_load_factor with a very high whole value such as 100000.
 	///
 	/// find_as
 	/// In order to support the ability to have a hashtable of strings but
@@ -979,20 +1027,20 @@ namespace eastl
 
 		// Returns the ratio of element count to bucket count. A return value of 1 means 
 		// there's an optimal 1 bucket for each element.
-		float load_factor() const EA_NOEXCEPT
-			{ return (float)mnElementCount / (float)mnBucketCount; }
+		hash_load_factor load_factor() const EA_NOEXCEPT
+			{ return hash_load_factor((uint32_t)mnElementCount, (uint32_t)mnBucketCount); }
 
 		// Inherited from the base class.
 		// Returns the max load factor, which is the load factor beyond
 		// which we rebuild the container with a new bucket count.
 		// get_max_load_factor comes from rehash_base.
-		//    float get_max_load_factor() const;
+		//    hash_load_factor get_max_load_factor() const;
 
 		// Inherited from the base class.
-		// If you want to make the hashtable never rehash (resize), 
-		// set the max load factor to be a very high number (e.g. 100000.f).
+		// If you want to make the hashtable never rehash (resize),
+		// set the max load factor to be a very high whole number (e.g. 100000).
 		// set_max_load_factor comes from rehash_base.
-		//    void set_max_load_factor(float fMaxLoadFactor);
+		//    void set_max_load_factor(hash_load_factor maxLoadFactor);
 
 		/// Generalization of get_max_load_factor. This is an extension that's
 		/// not present in C++ hash tables (unordered containers).

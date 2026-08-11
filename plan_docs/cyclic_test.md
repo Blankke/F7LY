@@ -69,16 +69,16 @@ ts=$(date +%Y%m%d-%H%M%S)
 mkdir -p logs/run
 img="/tmp/f7ly-rv-cyclictest-wait-eintr-${ts}.img"
 log="logs/run/output_r_cyclictest_wait_eintr_${ts}.txt"
-cp images/sdcard-rv.img "$img"
+cp images/oscomp-final-riscv64.img "$img"
 {
   echo "run_at=${ts}"
   echo "arch=riscv"
   echo "scope=cyclictest-wait-eintr"
-  echo "cmd=timeout 180s make run PROFILE=riscv-qemu QEMU_MEM=1G QEMU_RUN_SNAPSHOT= RISCV_EVAL_IMAGE=$img"
+  echo "cmd=timeout 180s make run PROFILE=riscv-qemu QEMU_DISK=final QEMU_MEM=1G QEMU_RUN_SNAPSHOT= QEMU_STORAGE_IMAGE=$img"
   echo "git_branch=$(git branch --show-current 2>/dev/null || true)"
   echo "git_head=$(git rev-parse --short HEAD 2>/dev/null || true)"
   echo "---- output ----"
-  timeout 180s make run PROFILE=riscv-qemu QEMU_MEM=1G QEMU_RUN_SNAPSHOT= RISCV_EVAL_IMAGE="$img"
+  timeout 180s make run PROFILE=riscv-qemu QEMU_DISK=final QEMU_MEM=1G QEMU_RUN_SNAPSHOT= QEMU_STORAGE_IMAGE="$img"
   echo "exit_code=$?"
 } > "$log" 2>&1
 echo "$log"
@@ -97,16 +97,16 @@ ts=$(date +%Y%m%d-%H%M%S)
 mkdir -p logs/run
 img="/tmp/f7ly-la-cyclictest-wait-eintr-${ts}.img"
 log="logs/run/output_l_cyclictest_wait_eintr_${ts}.txt"
-cp images/sdcard-la.img "$img"
+cp images/oscomp-final-loongarch64.img "$img"
 {
   echo "run_at=${ts}"
   echo "arch=loongarch"
   echo "scope=cyclictest-wait-eintr"
-  echo "cmd=timeout 240s make run PROFILE=loongarch-qemu QEMU_MEM=1G QEMU_RUN_SNAPSHOT= LOONGARCH_EVAL_IMAGE=$img"
+  echo "cmd=timeout 240s make run PROFILE=loongarch-qemu QEMU_DISK=final QEMU_MEM=1G QEMU_RUN_SNAPSHOT= QEMU_STORAGE_IMAGE=$img"
   echo "git_branch=$(git branch --show-current 2>/dev/null || true)"
   echo "git_head=$(git rev-parse --short HEAD 2>/dev/null || true)"
   echo "---- output ----"
-  timeout 240s make run PROFILE=loongarch-qemu QEMU_MEM=1G QEMU_RUN_SNAPSHOT= LOONGARCH_EVAL_IMAGE="$img"
+  timeout 240s make run PROFILE=loongarch-qemu QEMU_DISK=final QEMU_MEM=1G QEMU_RUN_SNAPSHOT= QEMU_STORAGE_IMAGE="$img"
   echo "exit_code=$?"
 } > "$log" 2>&1
 echo "$log"

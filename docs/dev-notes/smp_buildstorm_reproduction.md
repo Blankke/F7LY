@@ -18,7 +18,7 @@ scripts/run/smp_cpu_bench.sh \
   --arch all --worker-list 1,2,4,8 --seconds 3 --max-prime 1200
 ```
 
-该脚本在同一台 8-vCPU QEMU 中比较 1/2/4/8 个 worker，worker 使用 `sched_setaffinity` 固定到不同 CPU，并持续通过 `getcpu()` 验证没有迁移。RV 使用含真实 `/usr/bin/stress-ng` 的 `images/rootfs-riscv64.img`；LA 使用 `images/sdcard-la.img` 的静态 CPU 基准。
+该脚本在同一台 8-vCPU QEMU 中比较 1/2/4/8 个 worker，worker 使用 `sched_setaffinity` 固定到不同 CPU，并持续通过 `getcpu()` 验证没有迁移。RV 和 LA 都使用对应的 `images/oscomp-final-*.img` 决赛完整 rootfs。
 
 本轮实际结果：
 

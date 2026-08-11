@@ -11,6 +11,7 @@ BUILD_ROOT := $(PROJECT_ROOT)/build
 PROFILE ?= riscv-qemu
 MODE ?= evaluation
 DIS_PRINTF ?= 0
+PERF_DIAG ?= 0
 VERBOSE_SRCS ?= 0
 
 # 旧的 ARCH/BOARD/INITCODE_MODE 会绕过画像边界。明确报错比静默忽略更安全。
@@ -76,14 +77,25 @@ endif
 ifeq ($(PROFILE_ARCH),riscv)
   DEFAULT_CROSS_COMPILE := riscv64-linux-gnu-
   ARCH_DEFINES := -DRISCV
-  ARCH_FLAGS := -mcmodel=medany
+  KERNEL_ABI_FLAGS := -march=rv64imac_zicsr_zifencei -mabi=lp64
+  KERNEL_ARCH_FLAGS := -mcmodel=medany $(KERNEL_ABI_FLAGS) \
+                       -U__riscv_float_abi_soft -D__riscv_float_abi_double
+  INITCODE_ABI_FLAGS := -march=rv64imafdc -mabi=lp64d
+  INITCODE_ARCH_FLAGS := -mcmodel=medany $(INITCODE_ABI_FLAGS)
+  CONTEXT_ASM_FLAGS := -march=rv64imafdc_zicsr_zifencei -mabi=lp64
   KERNEL_ARCH_NAME := rv
   EA_PLATFORM := -DEA_PROCESSOR_RISCV
 else ifeq ($(PROFILE_ARCH),loongarch)
   DEFAULT_CROSS_COMPILE := loongarch64-linux-gnu-
   ARCH_DEFINES := -DLOONGARCH
-  ARCH_FLAGS := -march=loongarch64 -mabi=lp64d -mcmodel=normal \
-                -Wno-error=use-after-free
+  KERNEL_ABI_FLAGS := -march=loongarch64 -mabi=lp64s -mfpu=none
+  KERNEL_ARCH_FLAGS := $(KERNEL_ABI_FLAGS) -mcmodel=normal \
+                       -U__loongarch_soft_float -D__loongarch_double_float \
+                       -Wno-error=use-after-free
+  INITCODE_ABI_FLAGS := -march=loongarch64 -mabi=lp64d -mfpu=64
+  INITCODE_ARCH_FLAGS := $(INITCODE_ABI_FLAGS) -mcmodel=normal \
+                         -Wno-error=use-after-free
+  CONTEXT_ASM_FLAGS := -march=loongarch64 -mabi=lp64s -mfpu=64
   KERNEL_ARCH_NAME := la
   EA_PLATFORM := -DEA_PROCESSOR_LOONGARCH64
 else
@@ -108,24 +120,40 @@ else
   $(error 不支持的 MODE=$(MODE)，请使用 evaluation 或 shell)
 endif
 
-BUILD_DIR := $(BUILD_ROOT)/$(PROFILE)$(BUILD_MODE_SUFFIX)
-KERNEL_ELF := kernel-$(KERNEL_ARCH_NAME)$(PROFILE_KERNEL_SUFFIX)$(KERNEL_MODE_SUFFIX)
+ifeq ($(PERF_DIAG),0)
+  KERNEL_DIAG_SUFFIX :=
+  BUILD_DIAG_SUFFIX :=
+else ifeq ($(PERF_DIAG),1)
+  KERNEL_DIAG_SUFFIX := -perf
+  BUILD_DIAG_SUFFIX := -perf
+else
+  $(error 不支持的 PERF_DIAG=$(PERF_DIAG)，请使用 0 或 1)
+endif
+
+BUILD_DIR := $(BUILD_ROOT)/$(PROFILE)$(BUILD_MODE_SUFFIX)$(BUILD_DIAG_SUFFIX)
+KERNEL_ELF := kernel-$(KERNEL_ARCH_NAME)$(PROFILE_KERNEL_SUFFIX)$(KERNEL_MODE_SUFFIX)$(KERNEL_DIAG_SUFFIX)
 KERNEL_BIN := $(KERNEL_ELF).bin
 
 CPPFLAGS := $(ARCH_DEFINES) $(PROFILE_CPPFLAGS)
 ifeq ($(DIS_PRINTF),1)
   CPPFLAGS += -DDIS_PRINTF
 endif
+ifeq ($(PERF_DIAG),1)
+  CPPFLAGS += -DF7LY_PERF_DIAG=1
+endif
 
 CFLAGS := -Wall -Werror -ffreestanding -O2 -fno-builtin -g \
-          -fno-stack-protector $(ARCH_FLAGS)
+          -fno-stack-protector $(KERNEL_ARCH_FLAGS)
+ifeq ($(PERF_DIAG),1)
+  CFLAGS += -fno-omit-frame-pointer -fno-optimize-sibling-calls
+endif
 CXXFLAGS := $(CFLAGS) -std=c++23 -nostdlib \
             -DEA_PLATFORM_LINUX -DEA_PLATFORM_POSIX $(EA_PLATFORM) \
             -DEA_ENDIAN_LITTLE=1 -Wno-deprecated-declarations \
             -Wno-strict-aliasing -fno-exceptions -fno-rtti \
             -Wno-maybe-uninitialized -Wno-volatile \
             -Wno-tautological-compare -Wno-unused-but-set-variable
-LDFLAGS := -static -nostdlib -nostartfiles -nodefaultlibs \
+LDFLAGS := $(KERNEL_ABI_FLAGS) -static -nostdlib -nostartfiles -nodefaultlibs \
            -Wl,-z,max-page-size=4096 -Wl,-T,$(PROFILE_LINK_SCRIPT) \
            -Wl,--gc-sections
 

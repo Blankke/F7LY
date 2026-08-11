@@ -3,9 +3,9 @@
 #include "trap.hh"
 
 extern "C"{
-    void wrap_kerneltrap()
+    void wrap_kerneltrap(const uint64 *saved_frame)
     {
-        trap_mgr.kerneltrap();
+        trap_mgr.kerneltrap(saved_frame);
     }
 
     //!!写完进程后修改

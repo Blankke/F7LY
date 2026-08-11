@@ -242,7 +242,7 @@ namespace eastl
 
 		if (!bEnableOverflow)
 		{
-			base_type::set_max_load_factor(10000.f); // Set it so that we will never resize.
+			base_type::set_max_load_factor(10000u); // Set it so that we will never resize.
 		}	
 
 		#if EASTL_NAME_ENABLED
@@ -263,7 +263,7 @@ namespace eastl
 		EASTL_CT_ASSERT((nodeCount >= 1) && (bucketCount >= 2));
 
 		if(!bEnableOverflow)
-			base_type::set_max_load_factor(10000.f); // Set it so that we will never resize.
+			base_type::set_max_load_factor(10000u); // Set it so that we will never resize.
 
 		#if EASTL_NAME_ENABLED
 		mAllocator.set_name(EASTL_FIXED_HASH_SET_DEFAULT_NAME);
@@ -285,7 +285,7 @@ namespace eastl
 
 		if (!bEnableOverflow)
 		{
-			base_type::set_max_load_factor(10000.f); // Set it so that we will never resize.
+			base_type::set_max_load_factor(10000u); // Set it so that we will never resize.
 		}
 
 		#if EASTL_NAME_ENABLED
@@ -309,7 +309,7 @@ namespace eastl
 
 		if(!bEnableOverflow)
 		{
-			base_type::set_max_load_factor(10000.f); // Set it so that we will never resize.
+			base_type::set_max_load_factor(10000u); // Set it so that we will never resize.
 		}
 
 		#if EASTL_NAME_ENABLED
@@ -336,7 +336,7 @@ namespace eastl
 		EASTL_CT_ASSERT((nodeCount >= 1) && (bucketCount >= 2));
 
 		if(!bEnableOverflow)
-			base_type::set_max_load_factor(10000.f); // Set it so that we will never resize.
+			base_type::set_max_load_factor(10000u); // Set it so that we will never resize.
 
 		mAllocator.reset(mNodeBuffer);
 		base_type::insert(x.begin(), x.end());
@@ -358,7 +358,7 @@ namespace eastl
 		EASTL_CT_ASSERT((nodeCount >= 1) && (bucketCount >= 2));
 
 		if(!bEnableOverflow)
-			base_type::set_max_load_factor(10000.f); // Set it so that we will never resize.
+			base_type::set_max_load_factor(10000u); // Set it so that we will never resize.
 
 		mAllocator.reset(mNodeBuffer);
 		base_type::insert(x.begin(), x.end());
@@ -380,7 +380,7 @@ namespace eastl
 		EASTL_CT_ASSERT((nodeCount >= 1) && (bucketCount >= 2));
 
 		if(!bEnableOverflow)
-			base_type::set_max_load_factor(10000.f); // Set it so that we will never resize.
+			base_type::set_max_load_factor(10000u); // Set it so that we will never resize.
 
 		mAllocator.reset(mNodeBuffer);
 		base_type::insert(x.begin(), x.end());
@@ -396,7 +396,7 @@ namespace eastl
 		EASTL_CT_ASSERT((nodeCount >= 1) && (bucketCount >= 2));
 
 		if(!bEnableOverflow)
-			base_type::set_max_load_factor(10000.f); // Set it so that we will never resize.
+			base_type::set_max_load_factor(10000u); // Set it so that we will never resize.
 
 		#if EASTL_NAME_ENABLED
 		mAllocator.set_name(EASTL_FIXED_HASH_SET_DEFAULT_NAME);
@@ -520,7 +520,7 @@ namespace eastl
 		EASTL_CT_ASSERT((nodeCount >= 1) && (bucketCount >= 2));
 
 		if(!bEnableOverflow)
-			base_type::set_max_load_factor(10000.f); // Set it so that we will never resize.
+			base_type::set_max_load_factor(10000u); // Set it so that we will never resize.
 
 		#if EASTL_NAME_ENABLED
 		mAllocator.set_name(EASTL_FIXED_HASH_MULTISET_DEFAULT_NAME);
@@ -540,7 +540,7 @@ namespace eastl
 		EASTL_CT_ASSERT((nodeCount >= 1) && (bucketCount >= 2));
 
 		if(!bEnableOverflow)
-			base_type::set_max_load_factor(10000.f); // Set it so that we will never resize.
+			base_type::set_max_load_factor(10000u); // Set it so that we will never resize.
 
 		#if EASTL_NAME_ENABLED
 		mAllocator.set_name(EASTL_FIXED_HASH_MULTISET_DEFAULT_NAME);
@@ -561,7 +561,7 @@ namespace eastl
 		EASTL_CT_ASSERT((nodeCount >= 1) && (bucketCount >= 2));
 
 		if(!bEnableOverflow)
-			base_type::set_max_load_factor(10000.f); // Set it so that we will never resize.
+			base_type::set_max_load_factor(10000u); // Set it so that we will never resize.
 
 		#if EASTL_NAME_ENABLED
 		mAllocator.set_name(EASTL_FIXED_HASH_MULTISET_DEFAULT_NAME);
@@ -583,7 +583,7 @@ namespace eastl
 		EASTL_CT_ASSERT((nodeCount >= 1) && (bucketCount >= 2));
 
 		if(!bEnableOverflow)
-			base_type::set_max_load_factor(10000.f); // Set it so that we will never resize.
+			base_type::set_max_load_factor(10000u); // Set it so that we will never resize.
 
 		#if EASTL_NAME_ENABLED
 		mAllocator.set_name(EASTL_FIXED_HASH_MULTISET_DEFAULT_NAME);
@@ -609,7 +609,7 @@ namespace eastl
 		EASTL_CT_ASSERT((nodeCount >= 1) && (bucketCount >= 2));
 
 		if(!bEnableOverflow)
-			base_type::set_max_load_factor(10000.f); // Set it so that we will never resize.
+			base_type::set_max_load_factor(10000u); // Set it so that we will never resize.
 
 		mAllocator.reset(mNodeBuffer);
 		base_type::insert(x.begin(), x.end());
@@ -631,7 +631,7 @@ namespace eastl
 		EASTL_CT_ASSERT((nodeCount >= 1) && (bucketCount >= 2));
 
 		if(!bEnableOverflow)
-			base_type::set_max_load_factor(10000.f); // Set it so that we will never resize.
+			base_type::set_max_load_factor(10000u); // Set it so that we will never resize.
 
 		mAllocator.reset(mNodeBuffer);
 		base_type::insert(x.begin(), x.end());
@@ -653,7 +653,7 @@ namespace eastl
 		EASTL_CT_ASSERT((nodeCount >= 1) && (bucketCount >= 2));
 
 		if(!bEnableOverflow)
-			base_type::set_max_load_factor(10000.f); // Set it so that we will never resize.
+			base_type::set_max_load_factor(10000u); // Set it so that we will never resize.
 
 		mAllocator.reset(mNodeBuffer);
 		base_type::insert(x.begin(), x.end());
@@ -669,7 +669,7 @@ namespace eastl
 		EASTL_CT_ASSERT((nodeCount >= 1) && (bucketCount >= 2));
 
 		if(!bEnableOverflow)
-			base_type::set_max_load_factor(10000.f); // Set it so that we will never resize.
+			base_type::set_max_load_factor(10000u); // Set it so that we will never resize.
 
 		#if EASTL_NAME_ENABLED
 		mAllocator.set_name(EASTL_FIXED_HASH_MULTISET_DEFAULT_NAME);

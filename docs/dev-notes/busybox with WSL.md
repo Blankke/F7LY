@@ -1,9 +1,9 @@
 # 验证test-suit提供的busybox有ash
 sudo mkdir /mnt/sdcard-rv
-sudo mount -o loop images/sdcard-rv.img /mnt/sdcard-rv
+sudo mount -o loop images/oscomp-final-riscv64.img /mnt/sdcard-rv
 
 sudo mkdir /mnt/sdcard-la
-sudo mount -o loop images/sdcard-la.img /mnt/sdcard-la
+sudo mount -o loop images/oscomp-final-loongarch64.img /mnt/sdcard-la
 挂载到自己的文件系统上
 
 ```bash

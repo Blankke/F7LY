@@ -4,6 +4,7 @@
 #include "scheduler.hh"
 #include "tm/timer_manager.hh"
 #include "virtual_memory_manager.hh"
+#include "libs/perf_diag.hh"
 
 namespace virtio_blk
 {
@@ -198,6 +199,7 @@ namespace virtio_blk
         avail_[1] = static_cast<uint16>(avail_[1] + 1);
 
         ++inflight_count_;
+        F7LY_PERF_MAX(BlockMaxInflight, inflight_count_);
         transport_->notify_queue(0);
         return true;
     }
@@ -283,6 +285,9 @@ namespace virtio_blk
 
     void VirtioBlkQueue::submit_request_and_wait(IoRequest &request)
     {
+        F7LY_PERF_ADD(BlockRequest, 1);
+        F7LY_PERF_ADD(BlockRequestBytes, request.request_bytes);
+        F7LY_PERF_SCOPE(BlockWaitTimeTicks);
         lock_.acquire();
         scheduler_.enqueue(&request, now_us(), ewma_bps_);
         dispatch_pending_locked(nullptr);

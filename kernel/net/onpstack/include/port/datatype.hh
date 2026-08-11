@@ -21,8 +21,6 @@ typedef unsigned long long ULONGLONG;  //* 64位无符号长整型
 typedef long long          LONGLONG;   //* 64位有符号长整型
 typedef signed long        LONG;       //* 32位的有符号长整型
 typedef unsigned long      ULONG;      //* 32位的无符号长整型
-typedef float              FLOAT;      //* 32位的浮点型
-typedef double             DOUBLE;     //* 64位的双精度浮点型
 typedef signed int         INT;        //* 32位的有符号整型
 typedef unsigned int       UINT;       //* 32位的无符号整型
 typedef signed short       SHORT;      //* 16位的有符号短整型

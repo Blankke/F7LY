@@ -218,7 +218,7 @@ find <Linux启动分区的挂载目录> -type f \
 - 一个 U-Boot 能读取的 FAT 分区，里面放 `f7ly.bin` 和 `vf2.dtb`。
 - 一个 ext4 分区，里面至少有 `/bin/busybox`、`/musl/busybox`、`/bin/bash`、`/bin/sh` 之一。
 
-仓库中的 `images/sdcard-rv.img` 是已知的 4 GiB 裸 ext4 根文件系统，里面有 `/musl/busybox`。它不是完整 SD 卡镜像，不能覆盖整张卡；要写到 ext4 分区本身。
+仓库中的 `images/oscomp-final-riscv64.img` 是决赛完整 rootfs 的裸 ext4 镜像。它不是完整 SD 卡镜像，不能覆盖整张卡；要写到 ext4 分区本身。
 
 第一次可以不预先覆盖克隆卡的 ext4，只把两个启动文件复制到 FAT 分区；但这不表示根分区只读，F7LY 运行时仍可能修改它。若后来已经确认“内核能读 SD 卡，但克隆卡的根分区不适用”，再执行下面的备用方案。
 
@@ -250,7 +250,7 @@ sudo umount /mnt/f7ly-vf2-check
 
 ```bash
 sudo umount /dev/sdXN
-sudo dd if=images/sdcard-rv.img of=/dev/sdXN \
+sudo dd if=images/oscomp-final-riscv64.img of=/dev/sdXN \
   bs=4M status=progress conv=fsync
 ```
 
@@ -378,7 +378,7 @@ echo F7LY_VF2_BOOT_OK
 | `Starting kernel` 后完全无字 | 已执行 `booti` | 是否误用旧固件、OpenSBI 是否支持当前 SBI 串口、DTB 是否匹配；保存完整日志 |
 | `[PLIC]` 报 DTB context 错误 | 内核已解析 DTB | 换用包含正确 `interrupts-extended` 的板级 DTB |
 | `[dwmmc] ... failed` | 内存和中断大致已好 | SD 卡、SDIO1 时钟/复位、固件板级准备脚本、卡接触 |
-| 有 `[block]`，没有 ext4 | SD 驱动已好 | 是否把 `sdcard-rv.img` 写到了正确 ext4 分区、分区表是否正确 |
+| 有 `[block]`，没有 ext4 | SD 驱动已好 | 是否把 `oscomp-final-riscv64.img` 写到了正确 ext4 分区、分区表是否正确 |
 | 根文件系统挂载成功但没有 Shell | 内核和磁盘已好 | 根分区是否有 BusyBox、`bash` 或 `sh` |
 
 ## 5. 2K1000LA：一步一步启动
@@ -421,7 +421,7 @@ fdt print / compatible
 
 ### 5.2 准备 SATA 根盘
 
-F7LY 当前通过板载 AHCI 读取 SATA port 0。最确定的根盘是仓库里的 `images/sdcard-la.img`：它是 4 GiB 裸 ext4，包含 `/musl/busybox`。
+F7LY 当前通过板载 AHCI 读取 SATA port 0。最确定的根盘是仓库里的 `images/oscomp-final-loongarch64.img`：它是决赛完整 rootfs 的裸 ext4 镜像。
 
 不要优先使用 `images/rootfs-loongarch64.img`；当前工作区里的该镜像被文件系统检查标记为有错误。
 
@@ -437,7 +437,7 @@ lsblk -o NAME,PATH,SIZE,MODEL,TRAN,MOUNTPOINTS
 
 ```bash
 sudo umount /dev/sdX* 2>/dev/null || true
-sudo dd if=images/sdcard-la.img of=/dev/sdX \
+sudo dd if=images/oscomp-final-loongarch64.img of=/dev/sdX \
   bs=4M status=progress conv=fsync
 sync
 ```
@@ -591,7 +591,7 @@ echo F7LY_2K1000_BOOT_OK
 | DTB panic | 入口和串口已好 | 是否传了第二个参数、DTB magic、复制地址、型号和 RAM 重叠 |
 | `[pmm]` panic | DTB 已能读取 | DTB memory 节点是否属于当前板、是否包含内核所在物理区间 |
 | `[ahci] ... link timeout` | 内存、中断、驱动入口已好 | SSD 电源、SATA 线、port 0、盘是否正常 |
-| AHCI ready，但没有 ext4 | SATA 驱动已好 | 是否把 `sdcard-la.img` 写到正确整盘、镜像是否干净 |
+| AHCI ready，但没有 ext4 | SATA 驱动已好 | 是否把 `oscomp-final-loongarch64.img` 写到正确整盘、镜像是否干净 |
 | 根文件系统挂载成功但没有 Shell | 内核和磁盘已好 | 根盘是否有 BusyBox、`bash` 或 `sh` |
 | 能输出但键盘没反应 | 大部分启动已成功 | UART0 输入、中断控制器和 DTB；记录按键前后的完整日志 |
 | 很快关机 | 可能启动了评测版本 | 重新确认文件名中有 `-shell.bin`，不要在 Shell 中输入 `exit` |

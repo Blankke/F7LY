@@ -16,10 +16,12 @@
 #include "loongarch/trap.hh"
 #endif
 #include "printer.hh"
+#include "libs/perf_diag.hh"
 #include "devs/device_manager.hh"
 #include "fs/lwext4/ext4_errno.hh"
 #include "process_memory_manager.hh" // 新增：进程内存管理器
 #include "vm_object.hh"
+#include "file_page_cache.hh"
 #include "vma_metadata_utils.hh"
 #include "shm_manager.hh"
 #include "net/platform_network.hh"
@@ -1350,6 +1352,7 @@ namespace proc
                 p->_wait_channel_registered = false;
                 p->_killed = 0;     // 清除终止标志
                 p->_exiting = false; // 清除退出清理标记
+                p->_mm_cleanup_active = false;
                 p->_deferred_reap = false;
                 p->_xstate = 0;     // 清除退出状态码
                 p->_parent_exit_signal = ipc::signal::SIGCHLD;
@@ -1382,13 +1385,14 @@ namespace proc
 
 	                // 为该进程分配一页 trapframe 空间（用于中断时保存用户上下文）
 	                // printfYellow("[user pgtbl]==>alloc trapframe for proc %d\n", p->_global_id);
-                if ((p->_trapframe = (TrapFrame *)mem::k_pmm.try_alloc_page()) == nullptr)
+                p->set_trapframe((TrapFrame *)mem::k_pmm.try_alloc_page());
+                if (p->get_trapframe() == nullptr)
                 {
                     freeproc_creation_failed(p); // 使用专门的创建失败清理函数
                     p->_lock.release();
                     return nullptr;
                 }
-                memset(p->_trapframe, 0, sizeof(*p->_trapframe));
+                memset(p->get_trapframe(), 0, sizeof(*p->get_trapframe()));
                 p->_used_fpu = false;
                 p->_used_lsx = false;
 
@@ -1558,8 +1562,9 @@ namespace proc
         // 回收 PCB 时必须释放旧页，否则大量 fork/clone 会持续泄漏物理页。
         if (p->_trapframe != nullptr)
         {
-            mem::k_pmm.free_page(p->_trapframe);
-            p->_trapframe = nullptr;
+            TrapFrame *trapframe = p->_trapframe;
+            p->set_trapframe(nullptr);
+            mem::k_pmm.free_page(trapframe);
         }
 
 
@@ -1610,6 +1615,7 @@ namespace proc
         p->_wait_channel_registered = false;
         p->_killed = 0;                // 清除终止标志
         p->_exiting = false;           // 清除退出清理标记
+        p->_mm_cleanup_active = false; // 清除旧 mm 脱离区间标记
         p->_deferred_reap = false;     // 清除上一个任务遗留的延后回收标记
         p->_xstate = 0;                // 清除退出状态码
         p->_parent_exit_signal = ipc::signal::SIGCHLD;
@@ -1732,6 +1738,20 @@ namespace proc
          ****************************************************************************************/
 
 
+        assert(p != nullptr && p->_lock.is_held(),
+               "freeproc_creation_failed: child PCB lock must be held");
+        assert(p->_state == ProcState::USED,
+               "freeproc_creation_failed: published child state=%d pid=%d tid=%d",
+               static_cast<int>(p->_state), p->_pid, p->_tid);
+
+        /*
+         * 失败回滚会关闭 file、撤销 VMA/mm registry，这些后端都可能
+         * 等待 SleepLock 或 I/O。半成品仍为 USED，放开 PCB 锁不会让它
+         * 被调度；若带着这把非当前任务的自旋锁进入 sleep()，
+         * scheduler 必然看到 num_off > 1。返回前重新持锁，保持既有调用契约。
+         */
+        p->_lock.release();
+
         // 失败回滚阶段也可能已经懒创建了 fd 表/信号表，必须先收回，
         // 否则 freeproc() 会把它们当成泄漏直接判异常。
         p->cleanup_ofile();
@@ -1740,8 +1760,9 @@ namespace proc
         // 如果已经分配了trapframe，需要释放
         if (p->get_trapframe() != nullptr)
         {
-            mem::k_pmm.free_page(p->get_trapframe());
+            TrapFrame *trapframe = p->get_trapframe();
             p->set_trapframe(nullptr);
+            mem::k_pmm.free_page(trapframe);
         }
 
         // 如果已经创建了ProcessMemoryManager，需要释放
@@ -1751,27 +1772,19 @@ namespace proc
         if (mm != nullptr)
         {
             /*
-             * CLONE_VM 的失败任务与父线程共享同一个 mm。此前这里无条件调用
-             * emergency_cleanup()，会把父线程仍在执行的页表和 VMA 一并释放；
-             * 低内存下只要后续 fd/sighand 分配失败，就可能直接损坏整个线程组。
-             *
-             * 共享 mm 只归还本次 clone 增加的引用；仅当失败任务是唯一持有者
-             * 时，才允许走不写回的紧急清理。PCB 尚未发布为 RUNNABLE，因此
-             * 这里不需要为它保留任何地址空间内容。
+             * CLONE_VM 失败只归还本次 clone 增加的引用；独立的半成品 mm
+             * 则由同一个原子 release 成为最终清理者。不要先读 ref_count 再
+             * 选择 emergency_cleanup，父线程可能正并发归还它的引用。
              */
-            if (mm->get_ref_count() > 1)
+            p->reset_memory_manager_ptr();
+            if (mm->free_all_memory())
             {
-                mm->free_all_memory();
-            }
-            else
-            {
-                mm->emergency_cleanup();
                 delete mm;
             }
-            p->reset_memory_manager_ptr();
         }
 
-        // 调用标准的PCB清理
+        // freeproc() 修改 PCB 可见状态，最终收口阶段重新持锁。
+        p->_lock.acquire();
         freeproc(p);
     }
 
@@ -1907,6 +1920,8 @@ namespace proc
         // - SID = 1（成为会话1的领导者）
         // - 所有其他进程最终都成为init进程的子进程
 
+        // 所有 VMA/PTE 已构造完整，可安全向 truncate 反向扫描发布。
+        init_mm->publish_file_invalidation_registry();
         k_scheduler.set_task_state(*p, ProcState::RUNNABLE);
 
         p->_lock.release();
@@ -2546,7 +2561,9 @@ namespace proc
             return syscall::SYS_EFAULT;
         }
 
-        Pcb *np = fork(p, flags, stack_ptr, ctid, is_clone3, exit_signal);
+        // clone() 还需要写 parent_tid 并提交 TLS/父子关系。让 fork()
+        // 先保持 USED，避免为了处理可缺页的用户地址而一直持有子 PCB 锁。
+        Pcb *np = fork(p, flags, stack_ptr, ctid, is_clone3, exit_signal, false);
         if (np == nullptr)
         {
             // fork 失败表示无可用 PCB 或内存不足，返回 EAGAIN 让用户态可重试。
@@ -2564,21 +2581,34 @@ namespace proc
         {
             // parent_tid 指向的是 pid_t，必须按 4 字节写。
             // 之前按 8 字节写会把线程库紧邻的状态字段一并覆盖掉。
+            // copy_out() 可能惰性补页并等待 mm SleepLock；子任务尚未
+            // 发布，先放它的 PCB 自旋锁，否则 sleep() 会带两把锁进 sched。
+            np->_lock.release();
             if (mem::k_vmm.copy_out(*p->get_pagetable(), ptid, &new_tid, sizeof(new_tid)) < 0)
             {
-                // fork() 已把子任务发布为 RUNNABLE；失败回收前先撤销调度可见性，
-                // 否则 freeproc() 会把可运行 PCB 当作生命周期损坏而 panic。
-                k_scheduler.set_task_state(*np, ProcState::USED);
+                np->_lock.acquire();
                 freeproc_creation_failed(np); // 使用专门的创建失败清理函数
                 np->_lock.release();
                 // 用户态传入的 parent_tid 地址不可写，返回 EFAULT。
                 return syscall::SYS_EFAULT;
             }
+            np->_lock.acquire();
         }
         if (flags & syscall::CLONE_PARENT)
         {
             np->_parent = p->_parent; // 入口已经验证非空
         }
+
+        // parent_tid 缺页等待期间，另一线程可能启动 exec/exit_group。
+        // 提交前重新检查，不把已被终止屏障命中的半成品发布给调度器。
+        if (p->_killed || p->_exiting || np->_killed || np->_exiting)
+        {
+            freeproc_creation_failed(np);
+            np->_lock.release();
+            return syscall::SYS_EAGAIN;
+        }
+
+        k_scheduler.set_task_state(*np, ProcState::RUNNABLE);
         const int child_home_cpu = np->_last_cpu;
         np->_lock.release();
 
@@ -2610,7 +2640,8 @@ namespace proc
 
     // 这个函数主要用提供clone的底层支持
     Pcb *ProcessManager::fork(Pcb *p, uint64 flags, uint64 stack_ptr,
-                              uint64 ctid, bool is_clone3, int exit_signal)
+                              uint64 ctid, bool is_clone3, int exit_signal,
+                              bool publish)
     {
         (void)is_clone3;
 
@@ -2720,6 +2751,16 @@ namespace proc
                     }
                 }
             }
+
+            /*
+             * 与 truncate 的严格 happens-before：父 mm lock 同时覆盖
+             * “父 PTE/VMA 快照 -> 子补偿栈 PTE -> child publish”。
+             * - clone 先拿父锁：publish 推进 registry generation 后才放父锁，
+             *   truncate 拿到父锁且完成稳定检查前必看到 child 并重扫。
+             * - truncate 先拿父锁：父旧 PTE 已 zap，child 之后只能复制
+             *   空 PTE/新 EOF fault 结果，publish-after-check 也不会带旧文件页。
+             */
+            cloned_mm->publish_file_invalidation_registry();
         }
         parent_memory_guard.unlock();
 
@@ -3059,16 +3100,22 @@ namespace proc
                 // 对非 CLONE_VM 的 fork/clone，父子页表已经分离，写父页表会让子进程
                 // 看到未初始化的 tid 字段，进而破坏 glibc/pthread 的运行时状态。
                 int child_tid = np->_tid;
+                // copy_out() 可能在子 mm 中触发惰性缺页，而 fault_page()
+                // 可能睡眠等待 memory_lock。np 仍是 USED，放锁不会使它被调度；
+                // 不能带着非当前任务的 PCB 自旋锁进入 sleep/call_sched。
+                np->_lock.release();
                 if (mem::k_vmm.copy_out(*np->get_pagetable(),
                                         ctid,
                                         &child_tid,
                                         sizeof(child_tid),
                                         np->get_memory_manager()) < 0)
                 {
+                    np->_lock.acquire();
                     freeproc_creation_failed(np); // 使用专门的创建失败清理函数
                     np->_lock.release();
                     return nullptr; // EFAULT: Bad address
                 }
+                np->_lock.acquire();
             }
         }
         if (flags & syscall::CLONE_CHILD_CLEARTID)
@@ -3106,7 +3153,10 @@ namespace proc
             np->_vfork_parent = p;
         }
 
-        k_scheduler.set_task_state(*np, ProcState::RUNNABLE);
+        if (publish)
+        {
+            k_scheduler.set_task_state(*np, ProcState::RUNNABLE);
+        }
 
         return np;
     }
@@ -3764,6 +3814,10 @@ namespace proc
         if (p == _init_proc)
             panic("init exiting"); // 保护机制：init 进程不能退出
 
+#if F7LY_PERF_DIAG
+        const uint64 exit_begin = perfdiag::timestamp();
+#endif
+        F7LY_PERF_ADD(ProcessExit, 1);
 
         // 退出清理期间可能会触发文件回写/块设备 I/O，这些路径允许 sleep。
         // 因此不能长时间手工关中断；改用 _exiting 禁止 timer 抢占式 yield，
@@ -3822,6 +3876,11 @@ namespace proc
          ****************************************************************************************/
         // 使用ProcessMemoryManager统一处理内存释放
         p->cleanup_memory_manager(); // 释放所有内存资源（VMA、程序段、堆、页表、trapframe等）
+#if F7LY_PERF_DIAG
+        const uint64 exit_end = perfdiag::timestamp();
+        F7LY_PERF_ADD(ProcessExitTimeTicks,
+                      exit_end >= exit_begin ? exit_end - exit_begin : 0);
+#endif
 
         // 关闭文件描述符表，释放文件资源
         p->cleanup_ofile();
@@ -5175,25 +5234,14 @@ namespace proc
         // 文件映射验证
         fs::file *vfile = nullptr;
         fs::file *f = nullptr;
-        bool vma_owns_dedicated_file = false;
         bool have_file_size_at_mmap = false;
         uint64 file_size_at_mmap = 0;
+        bool have_file_size_epoch_at_mmap = false;
+        uint64 file_size_epoch_at_mmap = 0;
         uint64 map_addr = 0;
-
-        // 统一清理 mmap 中途失败时拿到的资源，避免把“半成功”状态留给后续回收路径。
-        auto release_mapping_file = [&]()
-        {
-            if (vma_owns_dedicated_file && vfile != nullptr)
-            {
-                vfile->free_file();
-                vfile = nullptr;
-                vma_owns_dedicated_file = false;
-            }
-        };
 
         auto fail_mmap = [&](int errnum) -> void *
         {
-            release_mapping_file();
             if (errno != nullptr)
             {
                 *errno = errnum;
@@ -5280,17 +5328,12 @@ namespace proc
             }
 
             vfile = f;
-            // 文件映射如果要按路径重新打开一份专用 backing file，
-            // 必须先把原 open file description 上尚未落盘/尚未对外可见的写合并内容刷出去。
-            // 否则像 basic/test_mmap 这种“刚写完就 mmap 同一个文件”的场景，
-            // 重新打开后看到的还是旧内容，缺页时就会读到 0 字节。
-            int flush_visibility_ret = f->flush_visibility_state();
-            if (flush_visibility_ret != 0)
-            {
-                printfRed("[mmap] Failed to flush file visibility state before reopening mapping file: %d\n",
-                          flush_visibility_ret);
-                return fail_mmap(flush_visibility_ret < 0 ? -flush_visibility_ret : flush_visibility_ret);
-            }
+            fs::FilePageCacheIdentity mmap_cache_identity{};
+            const bool have_mmap_cache_identity =
+                f->get_file_page_cache_identity(mmap_cache_identity);
+            const uint64 size_epoch_before = have_mmap_cache_identity
+                                                 ? file_page_cache::content_epoch(mmap_cache_identity)
+                                                 : 0;
             fs::Kstat mmap_stat;
             int stat_ret = fs::k_vfs.fstat(f, &mmap_stat);
             if (stat_ret != EOK)
@@ -5300,6 +5343,16 @@ namespace proc
             }
             have_file_size_at_mmap = true;
             file_size_at_mmap = mmap_stat.size;
+            if (have_mmap_cache_identity)
+            {
+                const uint64 size_epoch_after =
+                    file_page_cache::content_epoch(mmap_cache_identity);
+                if (size_epoch_before == size_epoch_after)
+                {
+                    have_file_size_epoch_at_mmap = true;
+                    file_size_epoch_at_mmap = size_epoch_after;
+                }
+            }
             // Respect memfd write seal: disallow shared writable mappings
             if (f->is_memfd())
             {
@@ -5309,37 +5362,6 @@ namespace proc
                         *errno = EPERM;
                     return MAP_FAILED;
                 }
-            }
-
-            // 普通文件映射优先使用独立 backing handle，避免 fd 关闭后把 VMA
-            // 持有的 file 对象一并回收。但 mkstemp()+unlink()+mmap() 是
-            // iperf/glibc 等程序常见路径；文件已经从目录摘除后不能再按路径
-            // 重新打开，只能让 VMA 持有当前打开文件对象的引用。
-            const eastl::string &mapping_path = f->backing_path();
-            bool can_reopen_for_vma = !f->is_virtual &&
-                                      f->_attrs.filetype == fs::FileTypes::FT_NORMAL &&
-                                      !f->is_memfd() &&
-                                      !mapping_path.empty() &&
-                                      fs::k_vfs.is_file_exist(mapping_path.c_str()) == 1;
-            if (can_reopen_for_vma)
-            {
-                fs::file *mapping_file = nullptr;
-                int reopen_flags = O_RDONLY;
-                if ((flags & MAP_SHARED) && (prot & PROT_WRITE))
-                {
-                    reopen_flags = O_RDWR;
-                }
-
-                int reopen_err = fs::k_vfs.openat(mapping_path, mapping_file, reopen_flags, 0);
-                if (reopen_err < 0 || mapping_file == nullptr)
-                {
-                    printfRed("[mmap] Failed to create dedicated mapping file for %s, err=%d\n",
-                              mapping_path.c_str(), reopen_err);
-                    return fail_mmap(reopen_err < 0 ? -reopen_err : EIO);
-                }
-
-                vfile = mapping_file;
-                vma_owns_dedicated_file = true;
             }
         }
 
@@ -5564,14 +5586,21 @@ namespace proc
             }
             if ((flags & MAP_SHARED) != 0)
             {
-                mapping_object = shm::k_smm.acquire_shared_file_object(vfile);
+                mapping_object = shm::k_smm.acquire_shared_file_object(
+                    vfile,
+                    file_size,
+                    have_file_size_epoch_at_mmap ? file_size_epoch_at_mmap : 0);
             }
             else
             {
                 mapping_object = new FileVmObject(vfile,
                                                   false,
                                                   false,
-                                                  vfile->backing_path());
+                                                  vfile->backing_path(),
+                                                  file_size,
+                                                  have_file_size_epoch_at_mmap
+                                                      ? file_size_epoch_at_mmap
+                                                      : 0);
             }
         }
 
@@ -5598,12 +5627,6 @@ namespace proc
 
         vm->vfd = is_anonymous ? -1 : fd;
         vm->vfile = vfile;
-        const bool dedicated_file_transferred = vma_owns_dedicated_file;
-        if (vma_owns_dedicated_file)
-        {
-            // 成功挂到 VMA 后，专用 backing file 的所有权转交给地址空间元数据。
-            vma_owns_dedicated_file = false;
-        }
         vm->offset = offset;
         vm->backing_kind = VMA_BACKING_NONE;
         vm->backing_shmid = -1;
@@ -5634,10 +5657,9 @@ namespace proc
         {
             vm->is_expandable = false;
             vm->max_len = aligned_length;
-            if (!dedicated_file_transferred)
-            {
-                vfile->dup(); // 兼容 memfd/虚拟文件等仍共享 file 对象的场景
-            }
+            // VMA 元数据和 FileVmObject 各持有原 open file description 的一份引用。
+            // 因此 close(fd) 不会让惰性缺页失去文件后端，也无需再按路径查找/重开。
+            vfile->dup();
         }
 
         if (vfile != nullptr)
@@ -6652,8 +6674,10 @@ namespace proc
         close_exec_file(main_exec_file);        \
         close_exec_file(interpreter_exec_file); \
         free_execve_scratch();     \
-        new_mm->free_all_memory(); \
-        delete new_mm;             \
+        if (new_mm->free_all_memory())     \
+        {                                  \
+            delete new_mm;                 \
+        }                                  \
         return retval;             \
     } while (0)
 
@@ -7653,6 +7677,8 @@ namespace proc
 
         // 完成新内存管理器的设置后，绑定到当前PCB
         proc->set_memory_manager(new_mm);
+        // exec 新 mm 在所有 ELF/VMA/栈 PTE 构造完成后才发布。
+        new_mm->publish_file_invalidation_registry();
         // 只有执行映像已经成功替换后才提交，失败的 execve 不覆盖旧值。
         proc->_cmdline = exec_cmdline;
 

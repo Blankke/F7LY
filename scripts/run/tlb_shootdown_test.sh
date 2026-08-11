@@ -80,21 +80,23 @@ check_and_repair_image() {
 
 run_arch() {
     local arch="$1"
-    local compiler kernel_profile kernel rootfs qemu binary temporary_rootfs timestamp log timeout_seconds rc managed_pages
+    local compiler kernel_profile image_kind kernel rootfs qemu binary temporary_rootfs timestamp log timeout_seconds rc managed_pages
     case "${arch}" in
         rv)
             compiler="riscv64-linux-gnu-gcc"
             kernel_profile="riscv-qemu"
+            image_kind="riscv-final"
             kernel="${PROJECT_ROOT}/kernel-rv-shell"
-            rootfs="${PROJECT_ROOT}/images/sdcard-rv.img"
+            rootfs="${PROJECT_ROOT}/images/oscomp-final-riscv64.img"
             qemu="qemu-system-riscv64"
             binary="${BUILD_DIR}/f7ly_tlb_shootdown_test-rv"
             ;;
         la)
             compiler="loongarch64-linux-gnu-gcc"
             kernel_profile="loongarch-qemu"
+            image_kind="loongarch-final"
             kernel="${PROJECT_ROOT}/kernel-la-shell"
-            rootfs="${PROJECT_ROOT}/images/sdcard-la.img"
+            rootfs="${PROJECT_ROOT}/images/oscomp-final-loongarch64.img"
             qemu="qemu-system-loongarch64"
             binary="${BUILD_DIR}/f7ly_tlb_shootdown_test-la"
             ;;
@@ -102,6 +104,7 @@ run_arch() {
 
     command -v "${compiler}" >/dev/null || die "缺少交叉编译器：${compiler}"
     command -v "${qemu}" >/dev/null || die "缺少 QEMU：${qemu}"
+    "${PROJECT_ROOT}/scripts/images/prepare-qemu-image.sh" "${image_kind}"
     [[ -f "${rootfs}" ]] || die "缺少 rootfs：${rootfs}"
 
     echo "[TLB] 构建 ${arch} shell 内核与静态专项"

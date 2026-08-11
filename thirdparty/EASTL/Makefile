@@ -8,6 +8,11 @@ ifeq ($(strip $(BUILDPATH)),)
 $(error 缺少 BUILDPATH，请通过 F7LY 顶层 Makefile 构建 EASTL)
 endif
 
+# 顶层构建显式传入完整内核 C++ flags，确保 EASTL 与其余内核对象使用
+# 完全相同的 ISA、soft-float ABI 和 freestanding 约束。
+KERNEL_CXXFLAGS ?= -nostdlib
+CXXFLAGS := $(KERNEL_CXXFLAGS)
+
 CXXFLAGS += -I include -nostdlib
 CXXFLAGS += -I test/packages/EABase/include/Common 
 CXXFLAGS += -I ../../kernel/
@@ -36,13 +41,12 @@ $(BUILDPATH)/thirdparty/EASTL/libeastl.a: $(cc_obj) source | initdir
 	rm -f $@
 	$(AR) rcs $@ $(cc_obj)
 
-$(BUILDPATH)/thirdparty/EASTL/source/%.o: source/%.cpp Makefile | initdir
+$(BUILDPATH)/thirdparty/EASTL/source/%.o: source/%.cpp Makefile $(KERNEL_CONFIG_STAMP) | initdir
 	$(CXX) -c $(CXXFLAGS) -MMD -MP \
 		-MF $(BUILDPATH)/thirdparty/EASTL/source/$*.d -o $@ $<
 
 # 让头文件变化能够准确触发对应 EASTL 对象重编，顶层无需猜测依赖关系。
 -include $(cc_dep)
-
 clean:
 	rm -rf $(BUILDPATH)/thirdparty/EASTL
 

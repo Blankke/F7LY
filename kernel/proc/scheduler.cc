@@ -6,6 +6,7 @@
 #include "hal/tlb_shootdown.hh"
 #include "signal.hh"
 #include "printer.hh"
+#include "libs/perf_diag.hh"
 #ifdef RISCV
 #include "mem/riscv/pagetable.hh"
 #elif defined(LOONGARCH)
@@ -556,9 +557,35 @@ namespace proc
                             p->_running_cpu = cpu_id;
                             set_task_state(*p, ProcState::RUNNING);
                             cpu->set_cur_proc(p);
-                            if (p->get_memory_manager() != nullptr)
+                            ProcessMemoryManager *mm = p->get_memory_manager();
+                            if (mm != nullptr &&
+                                !p->_exiting &&
+                                !p->_mm_cleanup_active &&
+                                !mm->inactive_final_teardown)
                             {
-                                hal::tlb::enter_mm(*p->get_memory_manager());
+                                hal::tlb::enter_mm(*mm);
+                            }
+                            else if (mm != nullptr && mm->inactive_final_teardown)
+                            {
+                                // begin_inactive_final_teardown() 之后释放 VMA/文件后端
+                                // 仍可能 sleep。唤醒只允许继续内核清理，绝不能重新
+                                // 发布 active CPU。该清理既可能来自 exit，也可能来自 exec 换映像。
+                                mm->tlb_state_lock.acquire();
+                                const uint64 active_cpus = mm->tlb_active_cpu_mask;
+                                mm->tlb_state_lock.release();
+                                assert(p->_exiting || p->_mm_cleanup_active,
+                                       "scheduler: final-teardown mm outside cleanup pid=%d tid=%d gid=%d mm=%p",
+                                       p->_pid,
+                                       p->_tid,
+                                       p->_global_id,
+                                       mm);
+                                assert(active_cpus == 0,
+                                       "scheduler: final-teardown mm reactivated pid=%d tid=%d gid=%d mm=%p active=%p",
+                                       p->_pid,
+                                       p->_tid,
+                                       p->_global_id,
+                                       mm,
+                                       active_cpus);
                             }
                             cpu->reset_time_slice();
                             proc::Context *cur_context = cpu->get_context();
@@ -566,6 +593,7 @@ namespace proc
                             {
                                 last_global_id = p->_global_id;
                             }
+                            F7LY_PERF_ADD(SchedulerSwitch, 1);
                             swtch(cur_context, &p->_context);
                             ran_task = true;
                             // 退出任务已经切回 scheduler，不再使用自己的内核
@@ -596,6 +624,7 @@ namespace proc
                  * 定时器每 10ms 都会唤醒 CPU；任务在扫描与 idle 之间变为
                  * RUNNABLE 的最坏调度延迟仍不超过一个 tick。
                  */
+                F7LY_PERF_ADD(SchedulerIdle, 1);
                 Cpu::idle_until_interrupt();
             }
         }

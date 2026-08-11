@@ -102,7 +102,7 @@ namespace proc
         int clone(uint64 flags, uint64 stack_ptr, uint64 ptid, uint64 tls, uint64 ctid,
                   bool is_clone3 = false, int exit_signal = -1);
         Pcb *fork(Pcb *p, uint64 flags, uint64 stack_ptr, uint64 ctid,
-                  bool is_clone3, int exit_signal = -1);
+                  bool is_clone3, int exit_signal = -1, bool publish = true);
         void fork_ret();
         void exit_proc(Pcb *p);           // 底层退出逻辑，不设置xstate
         void do_exit(Pcb *p, int state);  // 正常退出，设置xstate后调用exit_proc

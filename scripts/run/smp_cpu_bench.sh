@@ -225,7 +225,7 @@ build_and_run_case() {
             kernel_profile="riscv-qemu"
             kernel_image="${PROJECT_ROOT}/kernel-rv-shell"
             rootfs_image="${PROJECT_ROOT}/images/oscomp-final-riscv64.img"
-            image_kind="riscv-shell"
+            image_kind="riscv-final"
             qemu_bin="qemu-system-riscv64"
             benchmark_binary="${BENCH_DIR}/f7ly_smp_cpu_bench-rv"
             ;;
@@ -234,7 +234,7 @@ build_and_run_case() {
             kernel_profile="loongarch-qemu"
             kernel_image="${PROJECT_ROOT}/kernel-la-shell"
             rootfs_image="${PROJECT_ROOT}/images/oscomp-final-loongarch64.img"
-            image_kind="loongarch-shell"
+            image_kind="loongarch-final"
             qemu_bin="qemu-system-loongarch64"
             benchmark_binary="${BENCH_DIR}/f7ly_smp_cpu_bench-la"
             ;;

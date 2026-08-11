@@ -17,6 +17,7 @@
 #include "hal/arch.hh"
 #include "common.hh"
 #include "page.hh"
+#include "libs/perf_diag.hh"
 namespace mem
 {
 	PageTable k_pagetable;
@@ -98,6 +99,7 @@ namespace mem
 	}
 	Pte PageTable::walk(uint64 va, bool alloc)
 	{
+		F7LY_PERF_ADD(PageTableWalk, 1);
 		// printfRed( "walk: va=0x%x, alloc=%d\n", va, alloc );
 		if (!_is_global)
 		{

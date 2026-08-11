@@ -6,7 +6,7 @@
 #   scripts/run/futex_short_test.sh --arch all
 #   scripts/run/futex_short_test.sh --arch rv --qemu-cpus 8 --timeout 120
 #
-# 每个架构只运行一个 QEMU；原始 images/sdcard-*.img 不会被写入，测试程序
+# 每个架构只运行一个 QEMU；原始决赛 rootfs 不会被写入，测试程序
 # 和 guest 产生的文件都落在 /tmp 的镜像副本中。本脚本不启动 BuildStorm/Cargo。
 
 set -euo pipefail
@@ -58,21 +58,23 @@ mkdir -p "${BUILD_DIR}" "${LOG_DIR}"
 
 run_arch() {
     local arch="$1"
-    local compiler make_profile kernel rootfs qemu binary temp_image timestamp log rc
+    local compiler make_profile image_kind kernel rootfs qemu binary temp_image timestamp log rc
     case "${arch}" in
         rv)
             compiler="riscv64-linux-gnu-gcc"
             make_profile="riscv-qemu"
+            image_kind="riscv-final"
             kernel="${PROJECT_ROOT}/kernel-rv-shell"
-            rootfs="${PROJECT_ROOT}/images/sdcard-rv.img"
+            rootfs="${PROJECT_ROOT}/images/oscomp-final-riscv64.img"
             qemu="qemu-system-riscv64"
             binary="${BUILD_DIR}/f7ly_futex_short_test-rv"
             ;;
         la)
             compiler="loongarch64-linux-gnu-gcc"
             make_profile="loongarch-qemu"
+            image_kind="loongarch-final"
             kernel="${PROJECT_ROOT}/kernel-la-shell"
-            rootfs="${PROJECT_ROOT}/images/sdcard-la.img"
+            rootfs="${PROJECT_ROOT}/images/oscomp-final-loongarch64.img"
             qemu="qemu-system-loongarch64"
             binary="${BUILD_DIR}/f7ly_futex_short_test-la"
             ;;
@@ -80,6 +82,7 @@ run_arch() {
 
     command -v "${compiler}" >/dev/null || die "缺少交叉编译器：${compiler}"
     command -v "${qemu}" >/dev/null || die "缺少 QEMU：${qemu}"
+    "${PROJECT_ROOT}/scripts/images/prepare-qemu-image.sh" "${image_kind}"
     [[ -f "${rootfs}" ]] || die "缺少 shell 镜像：${rootfs}"
 
     echo "[FUTEX] 构建 ${arch} shell 内核与静态短测"

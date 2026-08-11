@@ -7,7 +7,7 @@
 #   scripts/run/ext4_concurrency_test.sh --arch rv --qemu-cpus 8 --qemu-mem 8G
 #
 # 该脚本会编译 shell 内核和静态测试程序，但不会运行 BuildStorm 或 Cargo 自编译。
-# 原始 images/sdcard-*.img 始终只读，所有 guest 写入都落在 /tmp 下的副本。
+# 原始决赛 rootfs 始终只读，所有 guest 写入都落在 /tmp 下的副本。
 
 set -euo pipefail
 
@@ -81,21 +81,23 @@ check_fsck() {
 
 run_arch() {
     local arch="$1"
-    local compiler make_profile kernel rootfs qemu binary temp_image timestamp log rc
+    local compiler make_profile image_kind kernel rootfs qemu binary temp_image timestamp log rc
     case "${arch}" in
         rv)
             compiler="riscv64-linux-gnu-gcc"
             make_profile="riscv-qemu"
+            image_kind="riscv-final"
             kernel="${PROJECT_ROOT}/kernel-rv-shell"
-            rootfs="${PROJECT_ROOT}/images/sdcard-rv.img"
+            rootfs="${PROJECT_ROOT}/images/oscomp-final-riscv64.img"
             qemu="qemu-system-riscv64"
             binary="${BUILD_DIR}/f7ly_ext4_concurrency_test-rv"
             ;;
         la)
             compiler="loongarch64-linux-gnu-gcc"
             make_profile="loongarch-qemu"
+            image_kind="loongarch-final"
             kernel="${PROJECT_ROOT}/kernel-la-shell"
-            rootfs="${PROJECT_ROOT}/images/sdcard-la.img"
+            rootfs="${PROJECT_ROOT}/images/oscomp-final-loongarch64.img"
             qemu="qemu-system-loongarch64"
             binary="${BUILD_DIR}/f7ly_ext4_concurrency_test-la"
             ;;
@@ -103,6 +105,7 @@ run_arch() {
 
     command -v "${compiler}" >/dev/null || die "缺少交叉编译器：${compiler}"
     command -v "${qemu}" >/dev/null || die "缺少 QEMU：${qemu}"
+    "${PROJECT_ROOT}/scripts/images/prepare-qemu-image.sh" "${image_kind}"
     [[ -f "${rootfs}" ]] || die "缺少 shell 存储镜像：${rootfs}"
 
     echo "[EXT4] 构建 ${arch} shell 内核与静态专项"

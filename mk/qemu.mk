@@ -2,11 +2,15 @@
 # 物理板画像只能构建产物，所有 QEMU 入口都会先检查画像内部的平台类型。
 
 IMAGE_DIR := $(PROJECT_ROOT)/images
-RISCV_EVAL_IMAGE ?= $(IMAGE_DIR)/oscomp-preliminary-riscv64.img
-LOONGARCH_EVAL_IMAGE ?= $(IMAGE_DIR)/oscomp-preliminary-loongarch64.img
-RISCV_SHELL_IMAGE ?= $(IMAGE_DIR)/oscomp-final-riscv64.img
-LOONGARCH_SHELL_IMAGE ?= $(IMAGE_DIR)/oscomp-final-loongarch64.img
+RISCV_PRELIMINARY_IMAGE ?= $(IMAGE_DIR)/oscomp-preliminary-riscv64.img
+LOONGARCH_PRELIMINARY_IMAGE ?= $(IMAGE_DIR)/oscomp-preliminary-loongarch64.img
+RISCV_FINAL_IMAGE ?= $(IMAGE_DIR)/oscomp-final-riscv64.img
+LOONGARCH_FINAL_IMAGE ?= $(IMAGE_DIR)/oscomp-final-loongarch64.img
 QEMU_IMAGE_PREPARE := $(PROJECT_ROOT)/scripts/images/prepare-qemu-image.sh
+
+# 磁盘套件与内嵌用户程序模式是两个独立维度。run 默认使用初赛盘，决赛
+# 测试显式传 QEMU_DISK=final；禁止再通过覆盖同名文件来偷偷切换测试集合。
+QEMU_DISK ?= preliminary
 
 QEMU_MEM ?= 8G
 QEMU_DEBUG_MEM ?= 8G
@@ -18,26 +22,33 @@ QEMU_DEBUG_SNAPSHOT ?= -snapshot
 QEMU_SNAPSHOT ?=
 
 ifeq ($(PROFILE_ARCH),riscv)
-  QEMU_EVAL_IMAGE := $(RISCV_EVAL_IMAGE)
-  QEMU_SHELL_IMAGE := $(RISCV_SHELL_IMAGE)
+  QEMU_PRELIMINARY_IMAGE := $(RISCV_PRELIMINARY_IMAGE)
+  QEMU_FINAL_IMAGE := $(RISCV_FINAL_IMAGE)
   QEMU_IMAGE_ARCH := riscv
   QEMU_BLOCK_DEVICE_ARGS := -device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0
 else
-  QEMU_EVAL_IMAGE := $(LOONGARCH_EVAL_IMAGE)
-  QEMU_SHELL_IMAGE := $(LOONGARCH_SHELL_IMAGE)
+  QEMU_PRELIMINARY_IMAGE := $(LOONGARCH_PRELIMINARY_IMAGE)
+  QEMU_FINAL_IMAGE := $(LOONGARCH_FINAL_IMAGE)
   QEMU_IMAGE_ARCH := loongarch
   QEMU_BLOCK_DEVICE_ARGS := -device virtio-blk-pci,drive=x0
 endif
 
+ifeq ($(QEMU_DISK),preliminary)
+  QEMU_DEFAULT_STORAGE_IMAGE := $(QEMU_PRELIMINARY_IMAGE)
+  QEMU_IMAGE_KIND := $(QEMU_IMAGE_ARCH)-preliminary
+else ifeq ($(QEMU_DISK),final)
+  QEMU_DEFAULT_STORAGE_IMAGE := $(QEMU_FINAL_IMAGE)
+  QEMU_IMAGE_KIND := $(QEMU_IMAGE_ARCH)-final
+else
+  $(error 不支持的 QEMU_DISK=$(QEMU_DISK)，请使用 preliminary 或 final)
+endif
+QEMU_STORAGE_IMAGE ?= $(QEMU_DEFAULT_STORAGE_IMAGE)
+
 ifeq ($(MODE),shell)
   QEMU_CONSOLE_ARGS ?= -display none -chardev stdio,id=shell_stdio,signal=off \
                        -serial chardev:shell_stdio -monitor none
-  QEMU_STORAGE_IMAGE ?= $(QEMU_SHELL_IMAGE)
-  QEMU_IMAGE_KIND := $(QEMU_IMAGE_ARCH)-shell
 else
   QEMU_CONSOLE_ARGS ?= -nographic
-  QEMU_STORAGE_IMAGE ?= $(QEMU_EVAL_IMAGE)
-  QEMU_IMAGE_KIND := $(QEMU_IMAGE_ARCH)-evaluation
 endif
 
 QEMU_STORAGE_ARGS = -drive file=$(QEMU_STORAGE_IMAGE),if=none,format=raw,id=x0 \
@@ -77,6 +88,7 @@ run:
 	fi
 	@$(MAKE) $(BUILD_SUBMAKE_JOBS) PROFILE=$(PROFILE) MODE=evaluation build-current
 	@$(MAKE) PROFILE=$(PROFILE) MODE=evaluation \
+		QEMU_DISK=$(QEMU_DISK) \
 		QEMU_SNAPSHOT="$(QEMU_RUN_SNAPSHOT)" qemu-run
 
 shell:
@@ -85,6 +97,7 @@ shell:
 	fi
 	@$(MAKE) $(BUILD_SUBMAKE_JOBS) PROFILE=$(PROFILE) MODE=shell build-current
 	@$(MAKE) PROFILE=$(PROFILE) MODE=shell \
+		QEMU_DISK=final \
 		QEMU_SNAPSHOT="$(QEMU_SHELL_SNAPSHOT)" qemu-run
 
 debug:
@@ -93,6 +106,7 @@ debug:
 	fi
 	@$(MAKE) $(BUILD_SUBMAKE_JOBS) PROFILE=$(PROFILE) MODE=$(MODE) build-current
 	@$(MAKE) PROFILE=$(PROFILE) MODE=$(MODE) \
+		QEMU_DISK=$(QEMU_DISK) \
 		QEMU_SNAPSHOT="$(QEMU_DEBUG_SNAPSHOT)" qemu-debug
 
 # qemu-run/qemu-debug 是脚本可复用的低层入口：它们只运行指定产物，不构建。

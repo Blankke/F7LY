@@ -9,12 +9,14 @@ PROJECT_ROOT := $(CURDIR)
 
 include mk/config.mk
 include mk/initcode.mk
+include mk/perf.mk
 include mk/kernel.mk
 include mk/qemu.mk
 
 .PHONY: all competition-riscv competition-loongarch \
         build build-current initcode run shell debug qemu-run qemu-debug \
         prepare-image help profiles print-config force-build-metadata \
+        perf-tool perf-tools perf-native-tests check-kernel-no-fp \
         clean clean-current cleanlog
 
 # 大赛固定入口：一次 make all 必须完整构建两套 QEMU evaluation 内核。
@@ -38,10 +40,10 @@ help:
 		'F7LY 构建命令：' \
 		'  make all' \
 		'  make build PROFILE=<画像> [MODE=evaluation|shell]' \
-		'  make run   PROFILE=<qemu画像>' \
+		'  make run   PROFILE=<qemu画像> [QEMU_DISK=preliminary|final]' \
 		'  make shell PROFILE=<qemu画像>' \
 		'  make debug PROFILE=<qemu画像> [MODE=evaluation|shell]' \
-		'  make prepare-image PROFILE=<qemu画像> [MODE=evaluation|shell]' \
+		'  make prepare-image PROFILE=<qemu画像> [QEMU_DISK=preliminary|final]' \
 		'  make profiles' \
 		'  make print-config PROFILE=<画像> [MODE=...]'
 
@@ -49,9 +51,9 @@ profiles:
 	@printf '%s\n' $(AVAILABLE_PROFILES)
 
 print-config:
-	@printf 'PROFILE=%s\nPROFILE_NAME=%s\nPROFILE_ARCH=%s\nPROFILE_BOARD=%s\nMODE=%s\nBUILD_DIR=%s\nKERNEL_ELF=%s\n' \
+	@printf 'PROFILE=%s\nPROFILE_NAME=%s\nPROFILE_ARCH=%s\nPROFILE_BOARD=%s\nMODE=%s\nPERF_DIAG=%s\nBUILD_DIR=%s\nKERNEL_ELF=%s\n' \
 		'$(PROFILE)' '$(PROFILE_NAME)' '$(PROFILE_ARCH)' '$(PROFILE_BOARD)' \
-		'$(MODE)' '$(BUILD_DIR)' '$(KERNEL_ELF)'
+		'$(MODE)' '$(PERF_DIAG)' '$(BUILD_DIR)' '$(KERNEL_ELF)'
 
 # 只删除本构建系统拥有的画像目录。build/ 下还可能保存 Docker 评测包、
 # selfbuild 镜像和专项日志，不能把整个目录当作一次性输出删除。

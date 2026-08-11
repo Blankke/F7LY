@@ -18,7 +18,7 @@ do
     target="$IMAGE_DIR/$image_name"
     if [ ! -s "$backup" ]; then
         echo "错误：bak 基线不存在或为空: $backup" >&2
-        echo "请先运行对应的 make prepare-image PROFILE=... MODE=..." >&2
+        echo "请先运行对应的 make prepare-image PROFILE=... QEMU_DISK=..." >&2
         exit 1
     fi
 

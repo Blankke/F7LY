@@ -22,6 +22,7 @@
 #include "platform/profile.hh"
 #include "printer.hh"
 #include "proc/proc_manager.hh"
+#include "proc/file_page_cache.hh"
 #include "proc/scheduler.hh"
 #include "shm/shm_manager.hh"
 #include "syscall_handler.hh"
@@ -58,6 +59,8 @@ void initialize_memory_and_core_services()
     mem::k_hmm.init("heap_memory_manager",
                     mem::k_pmm.get_heap_area_start(),
                     mem::k_pmm.get_heap_allocator_size());
+    // 文件页缓存依赖已经可用的 PMM/VMM/HMM，但必须在首个用户进程发布前初始化。
+    proc::file_page_cache::init();
     shm::k_smm.init(mem::k_pmm.get_shm_start(), mem::k_pmm.get_shm_size());
     mem::SlabAllocator::init();
     register_standard_streams();

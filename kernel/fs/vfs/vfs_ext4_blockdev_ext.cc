@@ -13,6 +13,7 @@
 #include "libs/klib.hh"
 #include "param.h"
 #include "mem/physical_memory_manager.hh"
+#include "libs/perf_diag.hh"
 
 namespace
 {
@@ -271,6 +272,15 @@ static int blockdev_rw_common(struct ext4_blockdev *bdev,
         if (rc != EOK)
         {
             return rc;
+        }
+
+        if (write)
+        {
+            F7LY_PERF_ADD(Ext4WriteBytes, chunk_bytes);
+        }
+        else
+        {
+            F7LY_PERF_ADD(Ext4ReadBytes, chunk_bytes);
         }
 
         if (!write)

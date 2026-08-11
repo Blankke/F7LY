@@ -182,7 +182,9 @@ namespace shm
 
         // 通用对象管理接口：
         // 共享文件映射从这里拿可复用对象，SysV SHM/普通对象析构也统一回这里做索引回收。
-        proc::FileVmObject *acquire_shared_file_object(fs::file *file_obj);
+        proc::FileVmObject *acquire_shared_file_object(fs::file *file_obj,
+                                                       uint64 initial_file_size = ~static_cast<uint64>(0),
+                                                       uint64 initial_file_size_epoch = 0);
         proc::SysvShmVmObject *acquire_sysv_object(int shmid);
         void note_object_created(proc::VmObject *object);
         void note_object_destroying(const proc::VmObject *object);

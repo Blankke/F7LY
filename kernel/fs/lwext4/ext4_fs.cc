@@ -878,6 +878,12 @@ int ext4_fs_alloc_inode(struct ext4_fs *fs, struct ext4_inode_ref *inode_ref, in
     /* Initialize i-node */
     struct ext4_inode *inode = inode_ref->inode;
 
+    // generation 必须跨同一 inode number 的 unlink/recreate 递增；先读取旧
+    // incarnation，再清空 inode。这样全局文件页缓存不会命中旧文件内容。
+    uint32_t generation = ext4_inode_get_generation(inode) + 1;
+    if (generation == 0)
+        generation = 1;
+
     memset(inode, 0, inode_size);
 
     uint32_t mode;
@@ -924,7 +930,7 @@ int ext4_fs_alloc_inode(struct ext4_fs *fs, struct ext4_inode_ref *inode_ref, in
     ext4_inode_set_del_time(inode, 0);
     ext4_inode_set_blocks_count(&fs->sb, inode, 0);
     ext4_inode_set_flags(inode, 0);
-    ext4_inode_set_generation(inode, 0);
+    ext4_inode_set_generation(inode, generation);
     if (inode_size > EXT4_GOOD_OLD_INODE_SIZE)
     {
         uint16_t size = ext4_get16(&fs->sb, want_extra_isize);

@@ -33,11 +33,11 @@ F7LY OS 是一个面向教学、比赛和 Linux ABI 兼容性评测的双架构�
 镜像文件位于 `images/`：
 
 - `images/oscomp-preliminary-riscv64.img`、
-  `images/oscomp-preliminary-loongarch64.img`：初赛评测盘，供 `make run`
-  使用。
+  `images/oscomp-preliminary-loongarch64.img`：初赛评测盘，也是 `make run`
+  的默认磁盘。
 - `images/oscomp-final-riscv64.img`、
   `images/oscomp-final-loongarch64.img`：决赛完整 rootfs，供
-  `make shell` 使用。
+  `make run QEMU_DISK=final` 和 `make shell` 使用。
 - `images/bak/`：上述四个镜像的本地基线备份。
 
 `make run`、`make shell` 和 `make debug` 启动 QEMU 前才检查镜像：先使用
@@ -45,6 +45,14 @@ F7LY OS 是一个面向教学、比赛和 Linux ABI 兼容性评测的双架构�
 下载官方 `.xz`，校验后解压到 `bak`，再复制工作副本。`make build` 和
 `make all` 只编译内核，不检查镜像、不访问网络。镜像体积很大，均由
 `.gitignore` 排除。
+
+默认磁盘套件集中定义在 `mk/qemu.mk` 的 `QEMU_DISK ?= preliminary`。
+临时运行决赛测例不需要替换或覆盖初赛盘，直接执行：
+
+```bash
+make run PROFILE=riscv-qemu QEMU_DISK=final
+make run PROFILE=loongarch-qemu QEMU_DISK=final
+```
 
 ## 快速开始
 
@@ -137,11 +145,11 @@ log="logs/run/output_r_${ts}_final-2026_QEMU_MEM-8G_QEMU_SMP-8_timeout-40m.txt"
 {
   echo "run_at=${ts}"
   echo "arch=riscv"
-  echo "cmd=timeout 40m make run PROFILE=riscv-qemu QEMU_MEM=8G QEMU_SMP=8"
+  echo "cmd=timeout 40m make run PROFILE=riscv-qemu QEMU_DISK=final QEMU_MEM=8G QEMU_SMP=8"
   echo "git_branch=$(git branch --show-current 2>/dev/null || true)"
   echo "git_head=$(git rev-parse --short HEAD 2>/dev/null || true)"
   echo "---- output ----"
-  timeout 40m make run PROFILE=riscv-qemu QEMU_MEM=8G QEMU_SMP=8
+  timeout 40m make run PROFILE=riscv-qemu QEMU_DISK=final QEMU_MEM=8G QEMU_SMP=8
   echo "exit_code=$?"
 } > "$log" 2>&1
 echo "$log"
@@ -231,10 +239,10 @@ which python
 镜像。也可以只准备镜像而不启动 QEMU：
 
 ```bash
-make prepare-image PROFILE=riscv-qemu MODE=evaluation
-make prepare-image PROFILE=loongarch-qemu MODE=evaluation
-make prepare-image PROFILE=riscv-qemu MODE=shell
-make prepare-image PROFILE=loongarch-qemu MODE=shell
+make prepare-image PROFILE=riscv-qemu QEMU_DISK=preliminary
+make prepare-image PROFILE=loongarch-qemu QEMU_DISK=preliminary
+make prepare-image PROFILE=riscv-qemu QEMU_DISK=final
+make prepare-image PROFILE=loongarch-qemu QEMU_DISK=final
 ```
 
 初赛盘来自 `pre-20250615` release，决赛完整 rootfs 来自

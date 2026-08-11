@@ -8,7 +8,7 @@ set -eu
 # 解压到 bak，再复制工作副本。构建内核不会调用本脚本。
 
 usage() {
-    echo "用法: $0 {riscv-evaluation|loongarch-evaluation|riscv-shell|loongarch-shell} [镜像路径]" >&2
+    echo "用法: $0 {riscv-preliminary|loongarch-preliminary|riscv-final|loongarch-final} [镜像路径]" >&2
     exit 2
 }
 
@@ -23,19 +23,19 @@ BACKUP_DIR="$IMAGE_DIR/bak"
 IMAGE_KIND=$1
 
 case "$IMAGE_KIND" in
-    riscv-evaluation)
+    riscv-preliminary)
         IMAGE_NAME="oscomp-preliminary-riscv64.img"
         IMAGE_URL="https://github.com/oscomp/testsuits-for-oskernel/releases/download/pre-20250615/sdcard-rv.img.xz"
         ;;
-    loongarch-evaluation)
+    loongarch-preliminary)
         IMAGE_NAME="oscomp-preliminary-loongarch64.img"
         IMAGE_URL="https://github.com/oscomp/testsuits-for-oskernel/releases/download/pre-20250615/sdcard-la.img.xz"
         ;;
-    riscv-shell)
+    riscv-final)
         IMAGE_NAME="oscomp-final-riscv64.img"
         IMAGE_URL="https://github.com/oscomp/testsuits-for-oskernel/releases/download/on-site-final-2025-rv64-fs/alpine-linux-riscv64-ext4fs.img.xz"
         ;;
-    loongarch-shell)
+    loongarch-final)
         IMAGE_NAME="oscomp-final-loongarch64.img"
         IMAGE_URL="https://github.com/oscomp/testsuits-for-oskernel/releases/download/on-site-final-2025-la64-fs/alpine-linux-loongarch64-ext4fs.img.xz"
         ;;

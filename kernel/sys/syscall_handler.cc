@@ -63,6 +63,7 @@
 #include "proc/posix_timers.hh"
 #include "proc/vma_metadata_utils.hh"
 #include "proc/vm_object.hh"
+#include "libs/perf_diag.hh"
 
 #include "fs/lwext4/ext4_errno.hh"
 #include "fs/lwext4/ext4.hh"
@@ -4207,6 +4208,9 @@ namespace syscall
         // intr_stats::k_intr_stats.record_interrupt(666);
         proc::Pcb *p = (proc::Pcb *)proc::k_pm.get_cur_pcb();
         uint64 sys_num = p->get_trapframe()->a7; // 获取系统调用号
+#if F7LY_PERF_DIAG
+        const uint64 perf_begin = perfdiag::timestamp();
+#endif
         if (sys_num >= max_syscall_funcs_num || sys_num < 0 || _syscall_funcs[sys_num] == nullptr)
         {
             printfRed("[SyscallHandler::invoke_syscaller]sys_num is out of range\n");
@@ -4232,6 +4236,10 @@ namespace syscall
             }
             p->_trapframe->a0 = ret; // 设置返回值
         }
+#if F7LY_PERF_DIAG
+        const uint64 perf_end = perfdiag::timestamp();
+        perfdiag::record_syscall(sys_num, perf_end >= perf_begin ? perf_end - perf_begin : 0);
+#endif
     }
 
     // ---------------- private helper functions ----------------

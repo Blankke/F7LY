@@ -4,7 +4,7 @@ extern "C"
 {
     __attribute__((section(".text.startup"))) int main()
     {
-        // cagent_test();
+        cagent_test();
         buildstorm_test();
         shutdown();
         return 0;

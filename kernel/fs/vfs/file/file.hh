@@ -28,6 +28,20 @@ namespace proc
 using namespace proc::ipc;
 namespace fs
 {
+	struct FilePageCacheIdentity
+	{
+		uint64 mount_identity = 0;
+		uint32 inode = 0;
+		uint32 inode_generation = 0;
+
+		bool operator==(const FilePageCacheIdentity &other) const
+		{
+			return mount_identity == other.mount_identity &&
+				   inode == other.inode &&
+				   inode_generation == other.inode_generation;
+		}
+	};
+
 	struct time_namespace_snapshot
 	{
 		int64 monotonic_offset_ns = 0;
@@ -330,6 +344,11 @@ namespace fs
 		virtual int flush_visibility_state() { return 0; }
 		// truncate/ftruncate 会改变文件内容边界；默认文件类型没有额外缓存。
 		virtual void invalidate_cached_file_data() {}
+		// 只有能给出稳定 inode incarnation 且确认没有延迟脏数据的后端，
+		// 才允许进入全局 clean file page cache。
+		virtual bool get_file_page_cache_identity(FilePageCacheIdentity &) const { return false; }
+		virtual bool file_page_cache_is_clean() const { return false; }
+		virtual void invalidate_cached_file_range(uint64, uint64) { invalidate_cached_file_data(); }
 		// 供匿名内核文件（如 epoll）在不依赖 RTTI 的情况下做类型识别。
 		virtual bool is_epoll_file() const { return false; }
 		virtual bool is_fanotify_file() const { return false; }

@@ -148,7 +148,7 @@ done
 
 command -v qemu-system-riscv64 >/dev/null || die "缺少 qemu-system-riscv64"
 command -v rg >/dev/null || die "缺少 rg"
-"${PROJECT_ROOT}/scripts/images/prepare-qemu-image.sh" riscv-shell "${rootfs}"
+"${PROJECT_ROOT}/scripts/images/prepare-qemu-image.sh" riscv-final "${rootfs}"
 
 if ((skip_build == 0)); then
     echo "[stress-ng] 构建 RISC-V shell 内核"

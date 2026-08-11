@@ -53,7 +53,7 @@ KERNEL_OBJS_NO_ENTRY := $(filter-out $(ENTRY_OBJ),$(KERNEL_OBJS))
 BUILD_CONFIG_STAMP := $(BUILD_DIR)/build-config.stamp
 KERNEL_SOURCE_MANIFEST := $(BUILD_DIR)/kernel-sources.list
 BUILD_SYSTEM_FILES := Makefile mk/config.mk mk/initcode.mk mk/kernel.mk mk/qemu.mk \
-                      $(PROFILE_FILE) thirdparty/EASTL/Makefile
+                      mk/perf.mk $(PROFILE_FILE) thirdparty/EASTL/Makefile
 BUILD_SYSTEM_HASH = $(shell sha256sum $(BUILD_SYSTEM_FILES) | sha256sum | cut -d' ' -f1)
 
 .PHONY: force-build-metadata
@@ -125,21 +125,70 @@ $(BUILD_DIR)/%.o: $(KERNEL_DIR)/%.s
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
 
+# 用户上下文保存汇编需要访问浮点/向量寄存器，但仍保持内核 soft-float
+# 调用 ABI；其它内核对象禁止生成这些指令。
+ifeq ($(PROFILE_ARCH),riscv)
+$(BUILD_DIR)/mem/riscv/trampoline.o: $(KERNEL_DIR)/mem/riscv/trampoline.S $(BUILD_CONFIG_STAMP)
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(filter-out -march=% -mabi=%,$(CFLAGS)) \
+		$(CONTEXT_ASM_FLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
+else ifeq ($(PROFILE_ARCH),loongarch)
+$(BUILD_DIR)/trap/loongarch/uservec.o: $(KERNEL_DIR)/trap/loongarch/uservec.S $(BUILD_CONFIG_STAMP)
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(filter-out -march=% -mabi=% -mfpu=%,$(CFLAGS)) \
+		$(CONTEXT_ASM_FLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
+endif
+
 # 仅在实际触发误报的翻译单元上放宽 EASTL 模板诊断。
 $(BUILD_DIR)/proc/proc_manager.o: CXXFLAGS += -Wno-error=uninitialized -Wno-uninitialized
 $(BUILD_DIR)/sys/syscall_handler.o: CXXFLAGS += -Wno-error=uninitialized -Wno-uninitialized
 $(BUILD_DIR)/fs/vfs/vfs_utils.o: CXXFLAGS += -Wno-error=uninitialized -Wno-uninitialized
 
+KERNEL_PRELINK := $(BUILD_DIR)/kernel-perf-prelink
+PERF_SYMBOL_ASM := $(BUILD_DIR)/perf_symbols.S
+PERF_SYMBOL_OBJ := $(BUILD_DIR)/perf_symbols.o
+
 $(KERNEL_ELF): $(ENTRY_OBJ) $(KERNEL_OBJS_NO_ENTRY) $(EASTL_LIB) \
-               $(PROFILE_LINK_SCRIPT) $(KERNEL_SOURCE_MANIFEST)
+               $(PROFILE_LINK_SCRIPT) $(KERNEL_SOURCE_MANIFEST) \
+               scripts/generate_perf_symbols.sh
+ifeq ($(PERF_DIAG),1)
+	$(LD) $(LDFLAGS) \
+		-Wl,--defsym,__f7ly_perf_symbols_start=0 \
+		-Wl,--defsym,__f7ly_perf_symbols_end=0 \
+		-Wl,--defsym,__f7ly_perf_symbol_names_start=0 \
+		-o $(KERNEL_PRELINK) $(ENTRY_OBJ) $(KERNEL_OBJS_NO_ENTRY) $(EASTL_LIB)
+	@scripts/generate_perf_symbols.sh generate $(CROSS_COMPILE) \
+		$(KERNEL_PRELINK) $(PERF_SYMBOL_ASM)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $(PERF_SYMBOL_ASM) -o $(PERF_SYMBOL_OBJ)
+	$(LD) $(LDFLAGS) -o $@ $(ENTRY_OBJ) $(KERNEL_OBJS_NO_ENTRY) \
+		$(EASTL_LIB) $(PERF_SYMBOL_OBJ)
+	@scripts/generate_perf_symbols.sh verify $(CROSS_COMPILE) $(KERNEL_PRELINK) $@
+else
 	$(LD) $(LDFLAGS) -o $@ $(ENTRY_OBJ) $(KERNEL_OBJS_NO_ENTRY) $(EASTL_LIB)
+endif
 	$(SIZE) $@
 
-$(KERNEL_BIN): $(KERNEL_ELF)
+KERNEL_FP_GATE_STAMP := $(BUILD_DIR)/kernel-no-fp.stamp
+
+.PHONY: check-kernel-no-fp
+check-kernel-no-fp: $(KERNEL_FP_GATE_STAMP)
+
+$(KERNEL_FP_GATE_STAMP): $(KERNEL_ELF) $(KERNEL_OBJS) $(EASTL_LIB) \
+                         scripts/check_kernel_no_fp.sh
+	@scripts/check_kernel_no_fp.sh $(PROFILE_ARCH) $(CROSS_COMPILE) \
+		$(KERNEL_ELF) $(KERNEL_OBJS) $(EASTL_LIB)
+	@touch $@
+
+$(KERNEL_BIN): $(KERNEL_ELF) $(KERNEL_FP_GATE_STAMP)
 	$(OBJCOPY) -R .note.gnu.build-id -R .comment -O binary $< $@
 
 export BUILDPATH := $(BUILD_DIR)
-$(EASTL_LIB): $(EASTL_INPUTS)
-	@$(MAKE) -C $(EASTL_DIR) CROSS_COMPILE=$(CROSS_COMPILE)
+# EASTL 子 make 把配置戳作为每个对象的直接依赖，因此必须先由顶层生成。
+# 否则全新画像并行构建时，子 make 只会看到一个尚不存在且无法自行生成的
+# 绝对路径，最终把它误报成“对象没有构建规则”。
+$(EASTL_LIB): $(EASTL_INPUTS) $(BUILD_CONFIG_STAMP)
+	@$(MAKE) -C $(EASTL_DIR) CROSS_COMPILE=$(CROSS_COMPILE) \
+		KERNEL_CXXFLAGS='$(CPPFLAGS) $(CXXFLAGS)' \
+		KERNEL_CONFIG_STAMP='$(BUILD_CONFIG_STAMP)'
 
 -include $(KERNEL_DEPS) $(INITCODE_DEPS)

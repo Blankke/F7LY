@@ -28,6 +28,7 @@
 #include "shm/shm_manager.hh"
 #include "hal/tlb_shootdown.hh"
 #include "vma_metadata_utils.hh"
+#include "scheduler.hh"
 #include <EASTL/vector.h>
 
 // 外部符号声明
@@ -41,10 +42,25 @@ namespace proc
         constexpr uint64 k_mmap_min_base = 0x10000000ULL;
         constexpr uint64 k_mmap_guard_gap = 16 * PGSIZE;
         constexpr uint64 k_mmap_upper_guard = 256 * PGSIZE;
+        constexpr uint32 k_file_invalidation_registry_capacity = num_process;
         inline uint32 max_reasonable_file_refcnt()
         {
             return num_process * max_open_files;
         }
+
+        struct FileInvalidationMmRegistry
+        {
+            FileInvalidationMmRegistry()
+            {
+                lock.init("file_mmap_registry");
+            }
+
+            SpinLock lock;
+            ProcessMemoryManager *slots[k_file_invalidation_registry_capacity]{};
+            uint64 generation = 1;
+        };
+
+        FileInvalidationMmRegistry g_file_invalidation_mm_registry;
 
         inline uint64 align_up_with_granularity(uint64 value, uint64 alignment)
         {
@@ -573,6 +589,8 @@ namespace proc
 
     ProcessMemoryManager::~ProcessMemoryManager()
     {
+        // 失败创建路径可能直接 delete；摘除操作是幂等的。
+        retire_file_invalidation_registry();
         retire_user_asid(user_asid);
         user_asid = 0;
         // 析构函数中不执行清理操作，避免双重释放
@@ -587,12 +605,11 @@ namespace proc
     bool ProcessMemoryManager::put()
     {
         int old_count = ref_count.fetch_sub(1, eastl::memory_order_acq_rel);
-        if (old_count <= 1)
+        if (old_count <= 0)
         {
-            // 引用计数降至0或以下，需要清理
-            return true;
+            panic("ProcessMemoryManager::put underflow mm=%p old_refs=%d", this, old_count);
         }
-        return false;
+        return old_count == 1;
     }
 
     int ProcessMemoryManager::get_ref_count() const
@@ -624,6 +641,182 @@ namespace proc
         }
         memory_lock_depth = 0;
         memory_lock.release();
+    }
+
+    void ProcessMemoryManager::publish_file_invalidation_registry()
+    {
+        FileInvalidationMmRegistry &registry = g_file_invalidation_mm_registry;
+        registry.lock.acquire();
+        if (file_invalidation_registered)
+        {
+            registry.lock.release();
+            return;
+        }
+
+        for (uint32 index = 0; index < k_file_invalidation_registry_capacity; ++index)
+        {
+            if (registry.slots[index] != nullptr)
+            {
+                continue;
+            }
+            registry.slots[index] = this;
+            file_invalidation_registered = true;
+            ++registry.generation;
+            if (registry.generation == 0)
+            {
+                registry.generation = 1;
+            }
+            registry.lock.release();
+            return;
+        }
+        registry.lock.release();
+        // 每个已发布 mm 至少对应一个 PCB，容量与进程池一致。
+        // 溢出时不能静默跳过，否则 truncate 可留下旧 PTE。
+        panic("ProcessMemoryManager: file invalidation registry exhausted");
+    }
+
+    void ProcessMemoryManager::retire_file_invalidation_registry()
+    {
+        FileInvalidationMmRegistry &registry = g_file_invalidation_mm_registry;
+        registry.lock.acquire();
+        if (file_invalidation_registered)
+        {
+            bool found = false;
+            for (uint32 index = 0; index < k_file_invalidation_registry_capacity; ++index)
+            {
+                if (registry.slots[index] == this)
+                {
+                    registry.slots[index] = nullptr;
+                    found = true;
+                    break;
+                }
+            }
+            if (!found)
+            {
+                registry.lock.release();
+                panic("ProcessMemoryManager: registered mm missing from file registry");
+            }
+            file_invalidation_registered = false;
+            ++registry.generation;
+            if (registry.generation == 0)
+            {
+                registry.generation = 1;
+            }
+        }
+        registry.lock.release();
+
+        // exec 可能持有旧 mm 的递归 memory_lock 进入最终清理；
+        // 而已 pin 的 truncate 扫描者正在等这把锁。摘 registry
+        // 后先临时完整放锁，等 pin 归零再恢复原深度，避免环。
+        const uint held_memory_lock_depth = memory_lock.is_holding()
+                                                ? memory_lock_depth
+                                                : 0;
+        for (uint depth = 0; depth < held_memory_lock_depth; ++depth)
+        {
+            unlock_memory();
+        }
+
+        // 等待位于 registry spinlock 和 mm SleepLock 之外。有当前任务时
+        // 主动让出 CPU，使单核上持 pin 的 truncate 扫描者能完成。
+        if (file_invalidation_pins.load(eastl::memory_order_acquire) != 0 &&
+            k_pm.get_cur_pcb() != nullptr &&
+            Cpu::get_cpu()->get_num_off() != 0)
+        {
+            // 这只可能说明新调用点在持 spinlock 时销毁了已发布 mm。
+            // 不能在关中断区域忙等/调度，明确 fail-stop 而不释放被 pin 的对象。
+            panic("ProcessMemoryManager: retiring pinned mm while interrupts are disabled");
+        }
+        while (file_invalidation_pins.load(eastl::memory_order_acquire) != 0)
+        {
+            if (k_pm.get_cur_pcb() != nullptr &&
+                Cpu::get_cpu()->get_num_off() == 0)
+            {
+                k_scheduler.yield();
+            }
+        }
+        for (uint depth = 0; depth < held_memory_lock_depth; ++depth)
+        {
+            lock_memory();
+        }
+    }
+
+    void ProcessMemoryManager::pin_file_invalidation()
+    {
+        const uint32 previous =
+            file_invalidation_pins.fetch_add(1, eastl::memory_order_acq_rel);
+        if (previous == ~static_cast<uint32>(0))
+        {
+            panic("ProcessMemoryManager: file invalidation pin overflow");
+        }
+    }
+
+    void ProcessMemoryManager::unpin_file_invalidation()
+    {
+        const uint32 previous =
+            file_invalidation_pins.fetch_sub(1, eastl::memory_order_acq_rel);
+        if (previous == 0)
+        {
+            panic("ProcessMemoryManager: unmatched file invalidation unpin");
+        }
+    }
+
+    void ProcessMemoryManager::begin_inactive_final_teardown()
+    {
+        /*
+         * 这是跳过逐批 TLB shootdown 的唯一入口。ref_count==0 保证不存在
+         * 合法的新执行者；active mask==0 保证此前运行该 mm 的 CPU 已离开。
+         * user_asid 此时仍为 active，析构时只会转为 retired；tlb_mm.cc 在
+         * ASID 真正复用前强制执行一次全核屏障，因此残留翻译不能指向复用页。
+         */
+        tlb_flush_lock.acquire();
+        tlb_state_lock.acquire();
+        const int references = ref_count.load(eastl::memory_order_acquire);
+        const uint64 active_cpus = tlb_active_cpu_mask;
+        const uint32 asid = user_asid;
+        if (references != 0 || active_cpus != 0 || asid == 0)
+        {
+            tlb_state_lock.release();
+            tlb_flush_lock.release();
+            panic("ProcessMemoryManager: unsafe final teardown mm=%p refs=%d active=%p asid=%u",
+                  this, references, active_cpus, asid);
+        }
+        inactive_final_teardown = true;
+        tlb_state_lock.release();
+        tlb_flush_lock.release();
+    }
+
+    void ProcessMemoryManager::reassert_inactive_final_teardown()
+    {
+        if (!inactive_final_teardown)
+        {
+            panic("ProcessMemoryManager: final teardown reasserted before begin mm=%p", this);
+        }
+
+        /*
+         * 退出清理允许在文件/VMA 后端中 sleep。scheduler 会对 final-teardown
+         * 任务跳过 enter_mm()；这里仍在每个无失效批次前执行 leave+复核，既
+         * 覆盖 begin 之前残留的本 CPU 登记，也防止未来调度路径回归后静默复用页。
+         */
+        Pcb *current = k_pm.get_cur_pcb();
+        if (current != nullptr && current->get_memory_manager() == this)
+        {
+            hal::tlb::leave_mm(*this);
+        }
+
+        tlb_flush_lock.acquire();
+        tlb_state_lock.acquire();
+        const int references = ref_count.load(eastl::memory_order_acquire);
+        const uint64 active_cpus = tlb_active_cpu_mask;
+        const uint32 asid = user_asid;
+        if (references != 0 || active_cpus != 0 || asid == 0)
+        {
+            tlb_state_lock.release();
+            tlb_flush_lock.release();
+            panic("ProcessMemoryManager: final teardown invariant lost mm=%p refs=%d active=%p asid=%u",
+                  this, references, active_cpus, asid);
+        }
+        tlb_state_lock.release();
+        tlb_flush_lock.release();
     }
 
     void ProcessMemoryManager::rebuild_vma_index()
@@ -816,6 +1009,24 @@ namespace proc
 
     int ProcessMemoryManager::fault_page(uint64 va, int access_type)
     {
+        // trap/copyin/MAP_POPULATE 都可进入此函数。不依赖每个上层
+        // 记得加锁；递归 memory_lock 使已加锁路径只增加 depth。
+        class FaultMemoryLockGuard
+        {
+        public:
+            explicit FaultMemoryLockGuard(ProcessMemoryManager &mm) : mm_(mm)
+            {
+                mm_.lock_memory();
+            }
+            ~FaultMemoryLockGuard()
+            {
+                mm_.unlock_memory();
+            }
+
+        private:
+            ProcessMemoryManager &mm_;
+        } fault_memory_guard(*this);
+
         uint64 page_va = PGROUNDDOWN(va);
         vma *vm = find_vma_covering(va);
         if (vm != nullptr && access_type == 1)
@@ -922,6 +1133,136 @@ namespace proc
         }
 
         return mem::k_vmm.allocate_vma_page(pagetable, va, vm, access_type);
+    }
+
+    void ProcessMemoryManager::zap_file_mappings_after_shrink(
+        const fs::FilePageCacheIdentity &identity,
+        uint64 new_size)
+    {
+        const uint64 first_file_page = PGROUNDDOWN(new_size) / PGSIZE;
+        const uint64 zap_file_offset = first_file_page * PGSIZE;
+
+        lock_memory();
+        for_each_vma([&](vma &entry) -> bool
+        {
+            if (!entry.used || entry.object == nullptr ||
+                entry.object->kind() != VmObjectKind::File)
+            {
+                return true;
+            }
+
+            auto *file_object = static_cast<FileVmObject *>(entry.object);
+            if (!file_object->matches_cache_identity(identity))
+            {
+                return true;
+            }
+
+            // source key 是绝对文件页号。先判断 VMA 是否与截断
+            // 后的范围相交，但每个匹配对象都可幂等退役其高页。
+            const uint64 area_pages =
+                (static_cast<uint64>(entry.len) + PGSIZE - 1) / PGSIZE;
+            uint64 first_area_page = 0;
+            if (zap_file_offset > entry.page_offset)
+            {
+                first_area_page = (zap_file_offset - entry.page_offset) / PGSIZE;
+            }
+
+            if (first_area_page < area_pages)
+            {
+                const uint64 first_va = PGROUNDDOWN(entry.addr) +
+                                        first_area_page * PGSIZE;
+                const uint64 end_va = PGROUNDUP(entry.end_addr());
+                if (entry.has_resident_pages && pagetable.get_base() != 0 &&
+                    first_va < end_va && end_va <= USER_MEMORY_TOP)
+                {
+                    // do_free=1 只归还 PTE 的 mapping ref；source/cache owner
+                    // 与 overlay owner 在各自路径单独归还。
+                    mem::k_vmm.vmunmap(pagetable,
+                                       first_va,
+                                       (end_va - first_va) / PGSIZE,
+                                       1,
+                                       mem::UnmapTlbMode::Invalidate);
+                }
+
+                if (entry.private_page_overlay != nullptr)
+                {
+                    for (auto it = entry.private_page_overlay->begin();
+                         it != entry.private_page_overlay->end();)
+                    {
+                        auto current = it++;
+                        if (current->first < first_area_page)
+                        {
+                            continue;
+                        }
+                        if (current->second != 0)
+                        {
+                            mem::k_pmm.free_page(user_page_kernel_ptr(current->second));
+                        }
+                        entry.private_page_overlay->erase(current);
+                    }
+                    if (entry.private_page_overlay->empty())
+                    {
+                        delete entry.private_page_overlay;
+                        entry.private_page_overlay = nullptr;
+                    }
+                }
+            }
+
+            // 必须仍持有 mm lock，使 VMA 对 object 的引用在进入
+            // object spinlock 前不会消失。锁序固定为 mm SleepLock -> object SpinLock。
+            file_object->retire_source_pages_from(first_file_page);
+            return true;
+        });
+        unlock_memory();
+    }
+
+    void invalidate_resident_file_mappings_after_shrink(
+        const fs::FilePageCacheIdentity &identity,
+        uint64 new_size)
+    {
+        if (identity.mount_identity == 0 || identity.inode == 0)
+        {
+            return;
+        }
+
+        FileInvalidationMmRegistry &registry = g_file_invalidation_mm_registry;
+        for (;;)
+        {
+            registry.lock.acquire();
+            const uint64 pass_generation = registry.generation;
+            registry.lock.release();
+
+            // 不在 16 KiB 内核栈放整个 mm 快照。逐 slot 在 registry
+            // lock 下 pin，随即释放自旋锁再进入可睡眠 mm/TLB 路径。
+            for (uint32 index = 0; index < k_file_invalidation_registry_capacity; ++index)
+            {
+                registry.lock.acquire();
+                ProcessMemoryManager *mm = registry.slots[index];
+                if (mm != nullptr)
+                {
+                    mm->pin_file_invalidation();
+                }
+                registry.lock.release();
+
+                if (mm == nullptr)
+                {
+                    continue;
+                }
+                mm->zap_file_mappings_after_shrink(identity, new_size);
+                mm->unpin_file_invalidation();
+            }
+
+            registry.lock.acquire();
+            const bool stable = registry.generation == pass_generation;
+            registry.lock.release();
+            if (stable)
+            {
+                return;
+            }
+            // fork 可在本轮扫描期间发布从旧 PTE 复制的新 mm。
+            // generation 变化时重扫；最终稳定检查后新建 mm 只能
+            // 从已 zap 的父 mm 复制，或按新 EOF 重新 fault。
+        }
     }
 
     uint64 ProcessMemoryManager::find_gap_in_vma_index(uint64 start_hint,
@@ -1063,6 +1404,24 @@ namespace proc
 
     ProcessMemoryManager *ProcessMemoryManager::clone_for_fork()
     {
+        // 把“父 PTE/VMA 快照 -> 子 mm registry 发布”放在同一个
+        // 父 mm 锁临界区。外层 fork 已持锁时只增加递归深度。
+        class CloneMemoryLockGuard
+        {
+        public:
+            explicit CloneMemoryLockGuard(ProcessMemoryManager &mm) : mm_(mm)
+            {
+                mm_.lock_memory();
+            }
+            ~CloneMemoryLockGuard()
+            {
+                mm_.unlock_memory();
+            }
+
+        private:
+            ProcessMemoryManager &mm_;
+        } clone_memory_guard(*this);
+
         // 进程复制：创建新的内存管理器并深拷贝内容
         ProcessMemoryManager *new_mgr = new ProcessMemoryManager();
 
@@ -1665,25 +2024,53 @@ namespace proc
             return;
         }
 
+        if (inactive_final_teardown)
+        {
+            reassert_inactive_final_teardown();
+        }
+        const mem::UnmapTlbMode tlb_mode =
+            inactive_final_teardown
+                ? mem::UnmapTlbMode::SkipInactiveFinalTeardown
+                : mem::UnmapTlbMode::Invalidate;
+        uint64 run_start = 0;
+        uint64 run_end = 0;
+        auto flush_run = [&]()
+        {
+            if (run_start == run_end)
+            {
+                return;
+            }
+            mem::k_vmm.vmunmap(pagetable,
+                               run_start,
+                               (run_end - run_start) / PGSIZE,
+                               1,
+                               tlb_mode);
+            run_start = run_end = 0;
+        };
+
         for (uint64 va = va_start; va < va_end && va < USER_MEMORY_TOP; va += PGSIZE)
         {
             uint64 probe = va < entry.addr ? entry.addr : va;
             if (probe >= entry.end_addr())
             {
+                flush_run();
                 continue;
             }
 
             const vma *owner = find_vma_covering(probe);
             if (owner != &entry)
             {
+                flush_run();
                 continue;
             }
 
-            if (is_page_mapped(va))
+            if (run_start == run_end)
             {
-                mem::k_vmm.vmunmap(pagetable, va, 1, 1);
+                run_start = va;
             }
+            run_end = va + PGSIZE;
         }
+        flush_run();
     }
 
     bool ProcessMemoryManager::heap_growth_conflicts_with_mapping(uint64 start, uint64 end) const
@@ -2644,19 +3031,27 @@ namespace proc
         }
 
         mem::PageTable &pt = pagetable;
+        if (inactive_final_teardown)
+        {
+            reassert_inactive_final_teardown();
+        }
+        const mem::UnmapTlbMode tlb_mode =
+            inactive_final_teardown
+                ? mem::UnmapTlbMode::SkipInactiveFinalTeardown
+                : mem::UnmapTlbMode::Invalidate;
 
         // 阶段1：不再依赖分散的引用计数，直接释放
         // 取消特殊页面的映射
 #ifdef RISCV
-        mem::k_vmm.vmunmap(pt, TRAMPOLINE, 1, 0);
+        mem::k_vmm.vmunmap(pt, TRAMPOLINE, 1, 0, tlb_mode);
 #endif
         // 每个 PCB 槽位在共享地址空间中都有一页独立 trapframe 映射。
         // 页表即将释放，逐个拆掉可避免 freewalk 遗留叶子映射。
         for (uint gid = 0; gid < num_process; ++gid)
         {
-            mem::k_vmm.vmunmap(pt, USER_TRAPFRAME(gid), 1, 0);
+            mem::k_vmm.vmunmap(pt, USER_TRAPFRAME(gid), 1, 0, tlb_mode);
         }
-        mem::k_vmm.vmunmap(pt, SIG_TRAMPOLINE, 1, 0);
+        mem::k_vmm.vmunmap(pt, SIG_TRAMPOLINE, 1, 0, tlb_mode);
 
         pt.freewalk();
         pagetable.set_base(0);
@@ -2694,22 +3089,65 @@ namespace proc
             return;
         }
 
-        for (uint64 va = va_start; va < va_end; va += PGSIZE)
+        // vmunmap 本身会跳过不存在/无效的 PTE，因此 check_validity 不再需要
+        // 让调用方先逐页 walk；保留参数只为维持现有调用契约。
+        (void)check_validity;
+        if (inactive_final_teardown)
         {
-            const vma *covering = find_vma_covering(va);
-            const bool do_free = covering == nullptr ? true : mapping_pages_should_be_freed_on_unmap(*covering);
-            if (check_validity)
+            reassert_inactive_final_teardown();
+        }
+        const mem::UnmapTlbMode tlb_mode =
+            inactive_final_teardown
+                ? mem::UnmapTlbMode::SkipInactiveFinalTeardown
+                : mem::UnmapTlbMode::Invalidate;
+
+        uint64 cursor = va_start;
+        while (cursor < va_end)
+        {
+            const vma *covering = find_vma_covering(cursor);
+            uint64 run_end = va_end;
+            bool do_free = true;
+            if (covering != nullptr)
             {
-                mem::Pte pte = pagetable.walk(va, 0);
-                if (!pte.is_null() && pte.is_valid())
+                do_free = mapping_pages_should_be_freed_on_unmap(*covering);
+                const uint64 covering_end = PGROUNDUP(covering->end_addr());
+                if (covering_end < run_end)
                 {
-                    mem::k_vmm.vmunmap(pagetable, va, 1, do_free ? 1 : 0);
+                    run_end = covering_end;
                 }
             }
             else
             {
-                mem::k_vmm.vmunmap(pagetable, va, 1, do_free ? 1 : 0);
+                const vma *next = find_first_vma_at_or_after(cursor);
+                if (next != nullptr && next->addr < va_end)
+                {
+                    const uint64 next_start = PGROUNDDOWN(next->addr);
+                    if (next_start > cursor)
+                    {
+                        run_end = next_start;
+                    }
+                    else
+                    {
+                        // VMA 理论上均页对齐；保守处理同页起点，避免坏元数据
+                        // 让循环停滞或错误释放共享后端页。
+                        do_free = mapping_pages_should_be_freed_on_unmap(*next);
+                        const uint64 next_end = PGROUNDUP(next->end_addr());
+                        run_end = next_end < va_end ? next_end : va_end;
+                    }
+                }
             }
+
+            if (run_end <= cursor)
+            {
+                panic("ProcessMemoryManager: safe_vmunmap made no progress cursor=%p end=%p",
+                      cursor, va_end);
+            }
+            mem::k_vmm.vmunmap(pagetable,
+                               cursor,
+                               (run_end - cursor) / PGSIZE,
+                               do_free ? 1 : 0,
+                               tlb_mode);
+            cursor = run_end;
         }
     }
 
@@ -2739,6 +3177,18 @@ namespace proc
             va_end = USER_MEMORY_TOP;
         }
 
+        // vmunmap 会自行忽略未驻留页；普通连续 VMA 直接交给其内部 256 页
+        // 批处理，避免上层每页一次 shootdown 和 PMM 锁竞争。
+        (void)check_validity;
+        if (inactive_final_teardown)
+        {
+            reassert_inactive_final_teardown();
+        }
+        const mem::UnmapTlbMode tlb_mode =
+            inactive_final_teardown
+                ? mem::UnmapTlbMode::SkipInactiveFinalTeardown
+                : mem::UnmapTlbMode::Invalidate;
+
         // 匿名私有映射如果已经有 resident overlay，就只拆真正 fault 过的页；
         // 不再像传统做法那样把整个 VMA 范围从头扫到尾。
         if (entry.object == nullptr &&
@@ -2748,6 +3198,23 @@ namespace proc
             uint64 base = PGROUNDDOWN(entry.addr);
             uint64 request_start = PGROUNDDOWN(va_start);
             uint64 request_end = PGROUNDUP(va_end);
+            constexpr uint32 k_sparse_unmap_batch_pages = 256;
+            uint64 sparse_addresses[k_sparse_unmap_batch_pages]{};
+            uint32 sparse_count = 0;
+            auto flush_sparse = [&]()
+            {
+                if (sparse_count == 0)
+                {
+                    return;
+                }
+                mem::k_vmm.vmunmap_sparse(pagetable,
+                                          sparse_addresses,
+                                          sparse_count,
+                                          1,
+                                          tlb_mode);
+                sparse_count = 0;
+            };
+
             for (const auto &overlay_entry : *entry.private_page_overlay)
             {
                 if (overlay_entry.second == 0)
@@ -2762,58 +3229,68 @@ namespace proc
                     continue;
                 }
 
-                if (check_validity)
+                sparse_addresses[sparse_count++] = va;
+                if (sparse_count == k_sparse_unmap_batch_pages)
                 {
-                    mem::Pte pte = pagetable.walk(va, 0);
-                    if (pte.is_null() || !pte.is_valid())
-                    {
-                        continue;
-                    }
+                    flush_sparse();
                 }
-
-                mem::k_vmm.vmunmap(pagetable, va, 1, 1);
             }
+            flush_sparse();
             return;
         }
 
         const bool do_free = mapping_pages_should_be_freed_on_unmap(entry);
-        for (uint64 va = va_start; va < va_end; va += PGSIZE)
-        {
-            if (check_validity)
-            {
-                mem::Pte pte = pagetable.walk(va, 0);
-                if (pte.is_null() || !pte.is_valid())
-                {
-                    continue;
-                }
-            }
-            mem::k_vmm.vmunmap(pagetable, va, 1, do_free ? 1 : 0);
-        }
+        mem::k_vmm.vmunmap(pagetable,
+                           va_start,
+                           (va_end - va_start) / PGSIZE,
+                           do_free ? 1 : 0,
+                           tlb_mode);
     }
 
     /****************************************************************************************
      * 统一内存释放接口实现
      ****************************************************************************************/
 
-    void ProcessMemoryManager::free_all_memory()
+    bool ProcessMemoryManager::free_all_memory()
     {
-        // 减少引用计数，只有当引用计数降为0时才释放整个内存
-        int old_count = ref_count.fetch_sub(1, eastl::memory_order_acq_rel);
-        
-        if (old_count <= 1)
+        /*
+         * fetch_sub 的旧值唯一决定最终清理者。不能让调用者在返回后再读
+         * ref_count 决定 delete：refs=2 时，非最后线程可能先返回，随后看到
+         * 另一个 CPU 已经把 refs 降到 0，进而在真正清理者仍使用 mm 时提前
+         * 析构对象。
+         */
+        const int old_count = ref_count.fetch_sub(1, eastl::memory_order_acq_rel);
+        if (old_count <= 0)
+        {
+            panic("ProcessMemoryManager::free_all_memory underflow mm=%p old_refs=%d asid=%u",
+                  this, old_count, user_asid);
+        }
+
+        if (old_count == 1)
         {
             // 线程共享地址空间路径里，如果引用计数已经漂掉，但进程池里仍有其他 PCB
             // 指向当前 mm，就绝不能继续 free 页表，否则会把仍在运行的线程直接打死。
+            // 所有正常 release 路径都必须先从 PCB 摘掉当前持有者，所以这里的
+            // 每一个 holder 都是真正尚未归还的引用，而不包含当前最终清理者。
             int holders = count_live_mm_holders(this);
-            if (holders > 1)
+            if (holders > 0)
             {
-                int remaining_holders = holders - 1;
-                ref_count.store(remaining_holders, eastl::memory_order_release);
+                ref_count.store(holders, eastl::memory_order_release);
                 shared_vm = true;
                 printfYellow("ProcessMemoryManager: refcount drift repaired, mm=%p holders=%d remaining=%d\n",
-                             this, holders, remaining_holders);
-                return;
+                             this, holders, holders);
+                return false;
             }
+
+            // 只有最后一个业务引用真正进入销毁时才摘 registry。
+            // 先禁止新 truncate snapshot，再等待已有 pin 离开，然后
+            // 才能释放 VMA/object/页表。
+            retire_file_invalidation_registry();
+
+            // 最后一个地址空间引用已归还，且 cleanup_memory_manager() 已让
+            // 当前 CPU 离开 mm。只有这个断言成立，后续批量撤 PTE 才可依赖
+            // “ASID 退休后、全核屏障前不复用”而省略逐批 shootdown。
+            begin_inactive_final_teardown();
 
             // 引用计数降为0，释放所有内存资源
             // print_memory_usage();
@@ -2839,17 +3316,21 @@ namespace proc
 
             // 3. 重置内存相关状态
             reset_memory_sections();
+            return true;
         }
-        else
-        {
-            shared_vm = true;
-        }
+
+        shared_vm = true;
         // 如果引用计数还大于0，说明还有其他进程/线程在使用这块内存，不进行释放
+        return false;
     }
 
     void ProcessMemoryManager::emergency_cleanup()
     {
         printfRed("ProcessMemoryManager: emergency cleanup\n");
+
+        // 只用于未发布/唯一持有的创建失败 mm。若 PCB 已经
+        // 短暂发布过，也要在释放 VMA 前摘除并等待 snapshot pin。
+        retire_file_invalidation_registry();
 
         // 紧急清理：不进行写回操作，只释放内存
 
@@ -2899,10 +3380,14 @@ namespace proc
                 uint64 va_start = PGROUNDDOWN((uint64)section_descs[i]._sec_start);
                 uint64 va_end = PGROUNDUP((uint64)section_descs[i]._sec_start + section_descs[i]._sec_size);
 
-                // 直接使用vmunmap清理，不检查页面有效性以提高错误处理的鲁棒性
-                for (uint64 va = va_start; va < va_end; va += PGSIZE)
+                // vmunmap 会跳过惰性未驻留页；整个连续段只做内部批量失效与
+                // PMM 归还，避免错误回滚路径逐页广播 TLB。
+                if (va_end > va_start)
                 {
-                    mem::k_vmm.vmunmap(pagetable, va, 1, 1);
+                    mem::k_vmm.vmunmap(pagetable,
+                                       va_start,
+                                       (va_end - va_start) / PGSIZE,
+                                       1);
                 }
             }
         }

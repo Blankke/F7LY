@@ -9,6 +9,7 @@
 #include "slab.hh"
 #include "devs/dtb.hh"
 #include "platform/memory.hh"
+#include "libs/perf_diag.hh"
 extern "C" char end[]; // 来自链接脚本
 extern "C" char kernel_start[];
 #ifdef RISCV
@@ -643,6 +644,7 @@ namespace mem
         {
             memset(pa, 0, PGSIZE);
         }
+        F7LY_PERF_ADD(PmmAllocPage, 1);
         return pa;
     }
 
@@ -714,6 +716,7 @@ namespace mem
 
         void *pa = pgnm2pa(page_index);
         memset(pa, 0, static_cast<uint64>(count) * PGSIZE);
+        F7LY_PERF_ADD(PmmAllocPage, count);
         return pa;
     }
 
@@ -753,6 +756,8 @@ namespace mem
         }
         _buddy->Free(static_cast<int>(page_index));
         memlock.release();
+        F7LY_PERF_ADD(PmmReleaseRef, block.block_pages);
+        F7LY_PERF_ADD(PmmFreePage, block.block_pages);
     }
 
     void PhysicalMemoryManager::free_page(void *pa)
@@ -798,6 +803,8 @@ namespace mem
             }
             _buddy->Free(static_cast<int>(page_index));
             memlock.release();
+            F7LY_PERF_ADD(PmmReleaseRef, block.block_pages);
+            F7LY_PERF_ADD(PmmFreePage, block.block_pages);
             return;
         }
         if (k_page_refcounts[page_index] > 1)
@@ -814,6 +821,11 @@ namespace mem
             _buddy->Free(page_index);
         }
         memlock.release();
+        F7LY_PERF_ADD(PmmReleaseRef, 1);
+        if (should_free)
+        {
+            F7LY_PERF_ADD(PmmFreePage, 1);
+        }
     }
 
     void PhysicalMemoryManager::free_pages(void *pa)
@@ -853,6 +865,8 @@ namespace mem
         }
         _buddy->Free(static_cast<int>(page_index));
         memlock.release();
+        F7LY_PERF_ADD(PmmReleaseRef, block.block_pages);
+        F7LY_PERF_ADD(PmmFreePage, block.block_pages);
     }
 
     bool PhysicalMemoryManager::retain_page(void *pa)
@@ -901,6 +915,71 @@ namespace mem
         }
         memlock.release();
         return retained_mask;
+    }
+
+    void PhysicalMemoryManager::release_pages_batch(void *const *pages, uint32 count)
+    {
+        if (pages == nullptr || count == 0)
+        {
+            return;
+        }
+
+        uint32 released_refs = 0;
+        uint32 freed_pages = 0;
+        memlock.acquire();
+        for (uint32 index = 0; index < count; ++index)
+        {
+            if (pages[index] == nullptr)
+            {
+                continue;
+            }
+            const uint64 page_index = pa2pgnm(pages[index]);
+            if (!page_index_in_range(page_index))
+            {
+                // 与 free_page() 保持一致：坏地址不能污染 buddy，但单个异常项
+                // 不应阻止同批其它合法页完成归还。
+                printfRed("[pmm] release_pages_batch out of managed range: pa=%p index=%d pages=%d\n",
+                          pages[index], static_cast<int>(page_index), page_count);
+                continue;
+            }
+
+            BuddySystem::PageQueryResult block =
+                _buddy->query_page(static_cast<uint32>(page_index));
+            if (!block.in_range || block.is_free)
+            {
+                memlock.release();
+                panic("[pmm] release_pages_batch on unallocated page pa=%p index=%lu",
+                      pages[index], page_index);
+            }
+            if (block.block_pages != 1 || block.block_offset != page_index)
+            {
+                memlock.release();
+                panic("[pmm] release_pages_batch requires single-page allocation pa=%p index=%lu block=%u+%u",
+                      pages[index], page_index, block.block_offset, block.block_pages);
+            }
+
+            const uint16 refcount = k_page_refcounts[page_index];
+            if (refcount == 0)
+            {
+                memlock.release();
+                panic("[pmm] release_pages_batch found zero refcount pa=%p index=%lu",
+                      pages[index], page_index);
+            }
+            ++released_refs;
+            if (refcount > 1)
+            {
+                --k_page_refcounts[page_index];
+                continue;
+            }
+
+            k_page_refcounts[page_index] = 0;
+            _buddy->Free(static_cast<int>(page_index));
+            ++freed_pages;
+        }
+        memlock.release();
+        F7LY_PERF_ADD(PmmReleaseRef, released_refs);
+        F7LY_PERF_ADD(PmmBatchReleaseRef, released_refs);
+        F7LY_PERF_ADD(PmmFreePage, freed_pages);
     }
 
     uint16 PhysicalMemoryManager::page_ref_count(void *pa)
@@ -997,6 +1076,7 @@ namespace mem
                 // 临时缓冲才允许跳过这次预清零。
                 memset(pa, 0, (size_t)page_num * PGSIZE);
             }
+            F7LY_PERF_ADD(PmmAllocPage, page_num);
             return pa;
         }
         // }
