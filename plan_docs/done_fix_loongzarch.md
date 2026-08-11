@@ -16,3 +16,5 @@ iozone中的preadv和pwritev测试会卡死，类似于原子性问题未解决�
 确保两个架构当前initcode中书写的所有测试都能够拉通跑完，解决全量测试中的每一个卡死问题，最终实现两个架构的测试能够顺利完成。
 
 已完成上述任务
+> 历史说明：本文记录的是旧构建接口。当前 LoongArch QEMU 命令为
+> `make run PROFILE=loongarch-qemu`，文中的 `make run l` 已删除。

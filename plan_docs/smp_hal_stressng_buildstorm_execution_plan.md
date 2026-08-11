@@ -296,10 +296,10 @@ guest 构建脚本要求：
 以下四个内核构建均成功：
 
 ```bash
-make build ARCH=riscv INITCODE_MODE=evaluation
-make build ARCH=loongarch INITCODE_MODE=evaluation
-make build ARCH=riscv INITCODE_MODE=shell
-make build ARCH=loongarch INITCODE_MODE=shell
+make build PROFILE=riscv-qemu MODE=evaluation
+make build PROFILE=loongarch-qemu MODE=evaluation
+make build PROFILE=riscv-qemu MODE=shell
+make build PROFILE=loongarch-qemu MODE=shell
 ```
 
 以下静态专项和脚本检查均成功：

@@ -147,3 +147,6 @@ F7LY:/glibc$
 ❯ ls
 bin  dev  etc  home  lib  lost+found  media  mnt  opt  proc  root  run  sbin  srv  sys  tmp  usr  var
 ```
+> 历史说明：本文记录的是旧构建接口。当前请使用
+> `make shell PROFILE=riscv-qemu` 或 `make shell PROFILE=loongarch-qemu`，
+> 文中的 `make shell r/l` 已删除。

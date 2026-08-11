@@ -129,8 +129,8 @@
 
 已经在提交过程中记录并完成的验证：
 
-- `make build ARCH=riscv`
-- `make build ARCH=loongarch`
+- `make build PROFILE=riscv-qemu`
+- `make build PROFILE=loongarch-qemu`
 - 双架构多轮 `timeout 60s make run ... QEMU_MEM=1G` smoke。
 
 关键结果：

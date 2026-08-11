@@ -2,7 +2,7 @@
 状态：已完成，待验收
 
 ### 情况描述
-`make shell r`后在`~/git_test`文件夹中`git init`并创建`hello.c`文件后，使用git status显示没有需要提交的文件
+`make shell PROFILE=riscv-qemu` 后在 `~/git_test` 文件夹中 `git init` 并创建 `hello.c` 文件，使用 `git status` 显示没有需要提交的文件。
 ```sh
 F7LY:~/git_test$ ls -la
 total 31

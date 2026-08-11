@@ -87,7 +87,7 @@
 - 不再存在任何会向 `vma_data._vm[]` 新增条目的运行时路径。
 - `find/prev/next/conflict/gap` 相关查询只以 `VMASpace` 为权威。
 - `fork`、`mprotect`、`munmap`、`mremap`、`shmat/shmdt`、信号栈扩展都不再依赖 legacy 槽位判断。
-- `make build ARCH=riscv` 与 `make build ARCH=loongarch` 均通过。
+- `make build PROFILE=riscv-qemu` 与 `make build PROFILE=loongarch-qemu` 均通过。
 - 定向回归至少覆盖：`mprotect`、`munmap`、`mremap`、`shmat/shmdt`、`fork`、`pthread`、`signal frame`、`/proc/self/maps`。
 
 ## 当前状态

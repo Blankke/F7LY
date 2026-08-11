@@ -57,8 +57,8 @@
 语法/构建：
 
 ```bash
-make build ARCH=riscv
-make build ARCH=loongarch
+make build PROFILE=riscv-qemu
+make build PROFILE=loongarch-qemu
 git diff --check
 ```
 
@@ -74,11 +74,11 @@ cp images/sdcard-rv.img "$img"
   echo "run_at=${ts}"
   echo "arch=riscv"
   echo "scope=cyclictest-wait-eintr"
-  echo "cmd=timeout 180s make run r QEMU_MEM=1G QEMU_SNAPSHOT= RISCV_EVAL_IMAGE=$img"
+  echo "cmd=timeout 180s make run PROFILE=riscv-qemu QEMU_MEM=1G QEMU_RUN_SNAPSHOT= RISCV_EVAL_IMAGE=$img"
   echo "git_branch=$(git branch --show-current 2>/dev/null || true)"
   echo "git_head=$(git rev-parse --short HEAD 2>/dev/null || true)"
   echo "---- output ----"
-  timeout 180s make run r QEMU_MEM=1G QEMU_SNAPSHOT= RISCV_EVAL_IMAGE="$img"
+  timeout 180s make run PROFILE=riscv-qemu QEMU_MEM=1G QEMU_RUN_SNAPSHOT= RISCV_EVAL_IMAGE="$img"
   echo "exit_code=$?"
 } > "$log" 2>&1
 echo "$log"
@@ -102,11 +102,11 @@ cp images/sdcard-la.img "$img"
   echo "run_at=${ts}"
   echo "arch=loongarch"
   echo "scope=cyclictest-wait-eintr"
-  echo "cmd=timeout 240s make run l QEMU_MEM=1G QEMU_SNAPSHOT= LOONGARCH_EVAL_IMAGE=$img"
+  echo "cmd=timeout 240s make run PROFILE=loongarch-qemu QEMU_MEM=1G QEMU_RUN_SNAPSHOT= LOONGARCH_EVAL_IMAGE=$img"
   echo "git_branch=$(git branch --show-current 2>/dev/null || true)"
   echo "git_head=$(git rev-parse --short HEAD 2>/dev/null || true)"
   echo "---- output ----"
-  timeout 240s make run l QEMU_MEM=1G QEMU_SNAPSHOT= LOONGARCH_EVAL_IMAGE="$img"
+  timeout 240s make run PROFILE=loongarch-qemu QEMU_MEM=1G QEMU_RUN_SNAPSHOT= LOONGARCH_EVAL_IMAGE="$img"
   echo "exit_code=$?"
 } > "$log" 2>&1
 echo "$log"

@@ -3730,7 +3730,7 @@ F7LY 的 vm_object.cc 已同步。继续同步 normal_file.cc 的 EOF 外偏移�
 
 
 
-已运行 make build ARCH=riscv > logs/build_riscv_mmapstress_fix_20260625-$(date +%H%M%S).txt 2>&1; echo rc=$?
+已运行 make build PROFILE=riscv-qemu > logs/build_riscv_mmapstress_fix_20260625-$(date +%H%M%S).txt 2>&1; echo rc=$?
 
 
 
@@ -3743,7 +3743,7 @@ F7LY 的 vm_object.cc 已同步。继续同步 normal_file.cc 的 EOF 外偏移�
 
 
 
-已运行 make build ARCH=loongarch > logs/build_loongarch_mmapstress_fix_20260625-$(date +%H%M%S).txt 2>&1; echo rc=$?
+已运行 make build PROFILE=loongarch-qemu > logs/build_loongarch_mmapstress_fix_20260625-$(date +%H%M%S).txt 2>&1; echo rc=$?
 
 
 
@@ -3756,7 +3756,7 @@ F7LY 的 vm_object.cc 已同步。继续同步 normal_file.cc 的 EOF 外偏移�
 
 
 
-已运行 make build ARCH=riscv > logs/build_riscv_mmapstress_fix_20260625-$(date +%H%M%S).txt 2>&1; echo rc=$?
+已运行 make build PROFILE=riscv-qemu > logs/build_riscv_mmapstress_fix_20260625-$(date +%H%M%S).txt 2>&1; echo rc=$?
 
 
 
@@ -3769,7 +3769,7 @@ F7LY RV 构建通过，继续 LA 构建。之后我会重新拉起官方 docker�
 
 
 
-已运行 make build ARCH=loongarch > logs/build_loongarch_mmapstress_fix_20260625-$(date +%H%M%S).txt 2>&1; echo rc=$?
+已运行 make build PROFILE=loongarch-qemu > logs/build_loongarch_mmapstress_fix_20260625-$(date +%H%M%S).txt 2>&1; echo rc=$?
 
 
 

@@ -46,7 +46,7 @@ host访问，输出：
 在guest（即内核中）使用
 
 ```sh
-make shell r
+make shell PROFILE=riscv-qemu
 
 # 拉起的内核shell中
 wget -O - http://10.0.2.2:18081/
@@ -108,7 +108,7 @@ debug方式：（必须先阅读agent_docs/development_debugging.md，了解调�
   原因：原逻辑在 input 全局锁内释放 TCP link、buffer、sem。  
   解决方案：锁内只摘除 input 并取走资源指针，锁外释放附属资源。
 
-- 验证：`make build ARCH=riscv`、`make build ARCH=loongarch` 通过；RISC-V guest 连续两次 `wget -O - http://10.0.2.2:18081/` 均输出 `written to stdout` 并返回 shell。
+- 验证：`make build PROFILE=riscv-qemu`、`make build PROFILE=loongarch-qemu` 通过；RISC-V guest 连续两次 `wget -O - http://10.0.2.2:18081/` 均输出 `written to stdout` 并返回 shell。
 
 ## 长网页connection closed
 ### 情况描述
@@ -197,7 +197,7 @@ host访问，输出：
 在guest（即内核中）使用
 
 ```sh
-make shell r
+make shell PROFILE=riscv-qemu
 
 # 拉起的内核shell中
 wget -O - http://10.0.2.2:18081/
