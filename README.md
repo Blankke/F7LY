@@ -41,10 +41,10 @@ F7LY OS 是一个面向教学、比赛和 Linux ABI 兼容性评测的双架构�
 - `images/bak/`：上述四个镜像的本地基线备份。
 
 `make run`、`make shell` 和 `make debug` 启动 QEMU 前才检查镜像：先使用
-`images/` 工作副本；工作副本缺失时从 `images/bak/` 复制；两者都缺失时
-下载官方 `.xz`，校验后解压到 `bak`，再复制工作副本。`make build` 和
-`make all` 只编译内核，不检查镜像、不访问网络。镜像体积很大，均由
-`.gitignore` 排除。
+`images/` 工作副本；工作副本缺失时从 `images/bak/` 复制。初赛盘两者都
+缺失时会下载官方 `.xz`；决赛盘当前没有可信下载地址，会明确报错并要求
+人工放置。`make build` 和 `make all` 只编译内核，不检查镜像、不访问网络。
+镜像体积很大，均由 `.gitignore` 排除。
 
 默认磁盘套件集中定义在 `mk/qemu.mk` 的 `QEMU_DISK ?= preliminary`。
 临时运行决赛测例不需要替换或覆盖初赛盘，直接执行：
@@ -235,8 +235,9 @@ which python
 
 ## 磁盘镜像准备
 
-通常无需手动下载，首次 `make run` 或 `make shell` 会自动准备对应架构的
-镜像。也可以只准备镜像而不启动 QEMU：
+初赛盘通常无需手动下载，首次 `make run` 会自动准备对应架构的镜像。决赛
+盘的可信来源尚未配置，必须先人工放入 `images/` 或 `images/bak/`。也可以
+只检查或准备镜像而不启动 QEMU：
 
 ```bash
 make prepare-image PROFILE=riscv-qemu QEMU_DISK=preliminary
@@ -245,10 +246,9 @@ make prepare-image PROFILE=riscv-qemu QEMU_DISK=final
 make prepare-image PROFILE=loongarch-qemu QEMU_DISK=final
 ```
 
-初赛盘来自 `pre-20250615` release，决赛完整 rootfs 来自
-`on-site-final-2025-rv64-fs` 和 `on-site-final-2025-la64-fs` release。
-具体 URL 集中维护在 `scripts/images/prepare-qemu-image.sh`，Makefile 不再
-重复保存下载地址。
+初赛盘来自 `pre-20250615` release。决赛镜像的 URL 当前刻意留空，避免
+误用其他年份的完整 rootfs；确认官方来源后再统一填写。具体 URL 集中维护
+在 `scripts/images/prepare-qemu-image.sh`，Makefile 不重复保存下载地址。
 
 ## 镜像源替换
 

@@ -3,9 +3,9 @@ set -eu
 
 # 为本地 QEMU 准备磁盘镜像。
 #
-# 固定镜像采用三层回退：先用 images/ 中的工作副本；工作副本不存在时，
-# 从 images/bak/ 的只读基线复制；两者都不存在时才下载官方 .xz，完整校验并
-# 解压到 bak，再复制工作副本。构建内核不会调用本脚本。
+# 固定镜像优先使用 images/ 工作副本，再从 images/bak/ 的只读基线恢复。
+# 只有配置了 IMAGE_URL 的镜像才允许继续走网络下载；当前决赛镜像来源尚未
+# 确认，因此 URL 留空并要求人工放置，避免自动拉取错误赛季的磁盘。
 
 usage() {
     echo "用法: $0 {riscv-preliminary|loongarch-preliminary|riscv-final|loongarch-final} [镜像路径]" >&2
@@ -33,11 +33,11 @@ case "$IMAGE_KIND" in
         ;;
     riscv-final)
         IMAGE_NAME="oscomp-final-riscv64.img"
-        IMAGE_URL="https://github.com/oscomp/testsuits-for-oskernel/releases/download/on-site-final-2025-rv64-fs/alpine-linux-riscv64-ext4fs.img.xz"
+        IMAGE_URL=""
         ;;
     loongarch-final)
         IMAGE_NAME="oscomp-final-loongarch64.img"
-        IMAGE_URL="https://github.com/oscomp/testsuits-for-oskernel/releases/download/on-site-final-2025-la64-fs/alpine-linux-loongarch64-ext4fs.img.xz"
+        IMAGE_URL=""
         ;;
     *)
         echo "错误：未知镜像类型: $IMAGE_KIND" >&2
@@ -97,6 +97,14 @@ cleanup() {
 trap cleanup EXIT HUP INT TERM
 
 if [ ! -s "$BACKUP_IMAGE" ]; then
+    if [ -z "$IMAGE_URL" ]; then
+        echo "错误：$IMAGE_KIND 尚未配置可信下载地址。" >&2
+        echo "请手动把正确镜像放到以下任一位置：" >&2
+        echo "  工作副本: $DEFAULT_IMAGE" >&2
+        echo "  bak 基线: $BACKUP_IMAGE" >&2
+        exit 1
+    fi
+
     for tool in curl xz; do
         if ! command -v "$tool" >/dev/null 2>&1; then
             echo "错误：缺少下载镜像所需工具: $tool" >&2

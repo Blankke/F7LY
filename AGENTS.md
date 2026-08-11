@@ -102,7 +102,8 @@ F7LY OS 是一个基于 xv6 思路扩展的教学/比赛用内核。主线目标
 - `make run` 使用 `pre-20250615` 初赛磁盘。
 - `make run PROFILE=<qemu画像> QEMU_DISK=final` 显式切换到决赛完整
   rootfs；默认值在 `mk/qemu.mk` 的 `QEMU_DISK ?= preliminary`。
-- `make shell` 使用 `on-site-final-2025-{rv64,la64}-fs` 决赛完整 rootfs。
+- `make shell` 使用人工放置的决赛完整 rootfs；当前决赛下载 URL 刻意留空，
+  禁止回退到其他年份的镜像。
 - 本地 QEMU 启动前由 `scripts/images/prepare-qemu-image.sh` 统一执行
-  `images/ 工作副本 -> images/bak/ 基线 -> 官方网络下载` 回退；纯
-  `make build` 和 `make all` 不检查磁盘。
+  `images/ 工作副本 -> images/bak/ 基线` 回退；仅配置了可信 URL 的镜像
+  才继续网络下载。纯 `make build` 和 `make all` 不检查磁盘。
