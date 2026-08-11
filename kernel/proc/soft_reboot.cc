@@ -80,7 +80,11 @@ namespace proc
 
             if (victim->_state == ProcState::USED)
             {
+                // creation-failure 回滚以“入口/返回时持有 PCB 锁”为契约；
+                // 内部会在可睡眠资源清理期间临时放锁。
+                victim->_lock.acquire();
                 freeproc_creation_failed(victim);
+                victim->_lock.release();
                 ++reclaimed;
                 continue;
             }

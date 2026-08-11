@@ -27,6 +27,7 @@
 #include "physical_memory_manager.hh"
 #include "proc_manager.hh"
 #include "virtual_memory_manager.hh"
+#include "libs/perf_diag.hh"
 #define min(a, b) ((a) < (b) ? (a) : (b))
 
 /**
@@ -58,6 +59,7 @@ public:
 
     void lock()
     {
+        perfdiag::CycleScope perf_wait(perfdiag::Counter::Ext4LockWaitCycles);
         proc::Pcb *current = proc::k_pm.get_cur_pcb();
 
         _state_lock.acquire();
@@ -142,6 +144,7 @@ public:
 
     void read_lock()
     {
+        perfdiag::CycleScope perf_wait(perfdiag::Counter::Ext4LockWaitCycles);
         proc::Pcb *current = proc::k_pm.get_cur_pcb();
 
         _state_lock.acquire();

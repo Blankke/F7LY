@@ -71,7 +71,7 @@ namespace eastl
 	///
 	/// set_max_load_factor
 	/// If you want to make a hashtable never increase its bucket usage,
-	/// call set_max_load_factor with a very high value such as 100000.f.
+	/// call set_max_load_factor with a very high whole value such as 100000.
 	///
 	/// bCacheHashCode
 	/// We provide the boolean bCacheHashCode template parameter in order

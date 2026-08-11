@@ -4,6 +4,7 @@
 #include "platform.hh"
 #include "hal/riscv/sbi.hh"
 #include "hal/tlb_shootdown.hh"
+#include "libs/perf_diag.hh"
 #include "param.h"
 #include "plic.hh"
 #include "mem/memlayout.hh"
@@ -261,6 +262,7 @@ void trap_manager::kerneltrap()
 
 void trap_manager::usertrap()
 {
+  F7LY_PERF_ADD(UserTrap, 1);
   // printfMagenta("into usertrap\n");
   int which_dev = 0;
   if ((r_sstatus() & riscv::csr::sstatus_spp_m) != 0)
@@ -426,73 +428,92 @@ void trap_manager::usertrapret()
           p ? (int)p->_state : -1,
           p ? (int)p->_exiting : -1);
   }
-  if (!p->get_memory_manager()->ensure_special_mappings())
+  proc::ProcessMemoryManager *mm = p->get_memory_manager();
+  if (p->_exiting || mm->inactive_final_teardown)
   {
-    panic("usertrapret: failed to ensure special mappings pid=%d tid=%d state=%d pt=%p",
+    // 退出清理可能在文件回写时 sleep；被唤醒后只能继续内核清理，绝不能
+    // 重新发布 active mm 或返回已开始拆除的用户页表。
+    panic("usertrapret: refusing exiting/final-teardown task pid=%d tid=%d exiting=%d final=%d mm=%p",
           p->_pid,
           p->_tid,
-          (int)p->_state,
-          (void *)p->get_pagetable()->get_base());
+          (int)p->_exiting,
+          (int)mm->inactive_final_teardown,
+          mm);
   }
-
   // CLONE_VM 线程共享用户页表，但每个 PCB 有自己的 trapframe 物理页。
   // 固定复用 TRAPFRAME 会让两个核同时返回用户态时互相拆掉对方的映射。
   // 因此按 PCB 槽位分配独立的高地址页，并把实际地址传给 trampoline。
   intr_off();
-  const uint64 user_trapframe_va = USER_TRAPFRAME(p->get_global_id());
-
-  // 同一线程的 trapframe PTE 在生命周期内保持不变；只有 PCB 槽位复用时
-  // 才需要替换。首次多个 CLONE_VM 线程同时返回时，页表层级创建必须串行化，
-  // 否则两个 CPU 可能互相覆盖同一个父级 PTE。
   mem::PageTable *user_pt = p->get_pagetable();
+  const uint64 user_pt_base = user_pt->get_base();
+  const uint64 user_trapframe_va = USER_TRAPFRAME(p->get_global_id());
   const uint64 expected_trapframe_pa = PGROUNDDOWN(
       riscv::virt_to_phy_address(reinterpret_cast<uint64>(p->get_trapframe())));
-  mem::Pte trapframe_pte = user_pt->walk(user_trapframe_va, false);
-  bool trapframe_mapping_matches =
-      !trapframe_pte.is_null() && trapframe_pte.is_valid() &&
-      reinterpret_cast<uint64>(trapframe_pte.pa()) == expected_trapframe_pa;
 
-  if (!trapframe_mapping_matches)
+  // 同一 PCB 的 mm、页表根和 trapframe 物理页稳定后，这个保留 PTE 不会被
+  // 普通 mmap/munmap 改动。仅首次绑定、exec 换 mm 或 PCB 复用时进入慢路径；
+  // CLONE_VM 首次并发建页表仍由全局更新锁串行化。
+  F7LY_PERF_ADD(TrapframeMapCheck, 1);
+  if (!p->trapframe_mapping_cache_matches(mm,
+                                          user_pt_base,
+                                          expected_trapframe_pa))
   {
     mem::k_vmm.lock_page_table_updates();
-    trapframe_pte = user_pt->walk(user_trapframe_va, false);
-    trapframe_mapping_matches =
-        !trapframe_pte.is_null() && trapframe_pte.is_valid() &&
-        reinterpret_cast<uint64>(trapframe_pte.pa()) == expected_trapframe_pa;
+    const bool special_mappings_ok = mm->ensure_special_mappings();
     bool mapped = true;
-    if (!trapframe_mapping_matches)
+    if (special_mappings_ok)
     {
-      mem::k_vmm.vmunmap(*user_pt, user_trapframe_va, 1, 0);
-      mapped = mem::k_vmm.map_pages(*user_pt,
-                                    user_trapframe_va,
-                                    PGSIZE,
-                                    (uint64)p->get_trapframe(),
-                                    riscv::PteEnum::pte_readable_m |
-                                        riscv::PteEnum::pte_writable_m);
+      mem::Pte trapframe_pte = user_pt->walk(user_trapframe_va, false);
+      const bool trapframe_mapping_matches =
+          !trapframe_pte.is_null() && trapframe_pte.is_valid() &&
+          reinterpret_cast<uint64>(trapframe_pte.pa()) == expected_trapframe_pa;
+      if (!trapframe_mapping_matches)
+      {
+        F7LY_PERF_ADD(TrapframeRemap, 1);
+        mem::k_vmm.vmunmap(*user_pt, user_trapframe_va, 1, 0);
+        mapped = mem::k_vmm.map_pages(*user_pt,
+                                      user_trapframe_va,
+                                      PGSIZE,
+                                      (uint64)p->get_trapframe(),
+                                      riscv::PteEnum::pte_readable_m |
+                                          riscv::PteEnum::pte_writable_m);
+      }
     }
     mem::k_vmm.unlock_page_table_updates();
+    if (!special_mappings_ok)
+    {
+      panic("usertrapret: failed to ensure special mappings pid=%d tid=%d state=%d pt=%p",
+            p->_pid,
+            p->_tid,
+            (int)p->_state,
+            (void *)user_pt_base);
+    }
     if (!mapped)
     {
       panic("usertrapret: failed to map trapframe");
     }
-  }
-  mem::Pte pte = p->get_pagetable()->walk(TRAMPOLINE, 0);
-  if (pte.is_null() || pte.is_valid() == 0)
-  {
-    proc::ProcessMemoryManager *mm = p->get_memory_manager();
-    mem::PageTable *pt = p->get_pagetable();
-    uint64 pt_base = (pt != nullptr) ? pt->get_base() : 0;
-    panic("trampoline not mapped in user pagetable! pid=%d tid=%d state=%d signal=%d mm=%p pt=%p pt_base=%p trapframe=%p epc=%p sp=%p",
-          p ? p->_pid : -1,
-          p ? p->_tid : -1,
-          p ? (int)p->_state : -1,
-          p ? p->_signal : -1,
-          mm,
-          pt,
-          (void *)pt_base,
-          p ? p->get_trapframe() : nullptr,
-          p ? (void *)p->_trapframe->epc : nullptr,
-          p ? (void *)p->_trapframe->sp : nullptr);
+
+#if defined(F7LY_TRAP_RETURN_DIAGNOSTICS) && F7LY_TRAP_RETURN_DIAGNOSTICS
+    // 诊断构建可在生命周期边界额外核对 trampoline；默认构建不在每次
+    // syscall 返回时软件遍历固定高地址页表。
+    mem::Pte trampoline_pte = user_pt->walk(TRAMPOLINE, false);
+    if (trampoline_pte.is_null() || !trampoline_pte.is_valid())
+    {
+      panic("trampoline not mapped in user pagetable! pid=%d tid=%d state=%d signal=%d mm=%p pt=%p pt_base=%p trapframe=%p epc=%p sp=%p",
+            p->_pid,
+            p->_tid,
+            (int)p->_state,
+            p->_signal,
+            mm,
+            user_pt,
+            (void *)user_pt_base,
+            p->get_trapframe(),
+            (void *)p->_trapframe->epc,
+            (void *)p->_trapframe->sp);
+    }
+#endif
+
+    p->cache_trapframe_mapping(mm, user_pt_base, expected_trapframe_pa);
   }
 
   // we're about to switch the destination of traps from
@@ -523,9 +544,9 @@ void trap_manager::usertrapret()
 
   // ASID 0 保留给内核；用户地址空间在回收池完成全核 flush 前不会复用
   // 非零 ASID，因此 trap 热路径只需切换 satp，无需每次清空本 hart 全 TLB。
-  hal::tlb::enter_mm(*p->get_memory_manager());
+  hal::tlb::enter_mm(*mm);
   uint64 satp = MAKE_SATP_ASID(
-      p->get_pagetable()->get_base(), riscv_user_asid(p->get_memory_manager()));
+      user_pt_base, riscv_user_asid(mm));
   // debug
 
   uint64 fn = TRAMPOLINE + (userret - trampoline);

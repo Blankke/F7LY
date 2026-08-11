@@ -386,6 +386,10 @@ namespace fs
                          eastl::make_unique<ProcStatProvider>());
         add_virtual_file("/proc/uptime", fs::FileTypes::FT_NORMAL,
                          eastl::make_unique<ProcUptimeProvider>());
+#if F7LY_PERF_DIAG
+        add_virtual_file("/proc/f7ly/perf", fs::FileTypes::FT_NORMAL,
+                         eastl::make_unique<ProcF7lyPerfProvider>());
+#endif
         add_virtual_file("/proc/net/tcp", fs::FileTypes::FT_NORMAL,
                          eastl::make_unique<ProcNetTcpProvider>(false));
         add_virtual_file("/proc/net/tcp6", fs::FileTypes::FT_NORMAL,

@@ -26,6 +26,9 @@ struct ext4_mountpoint {
     /**@brief   Mount done flag.*/
     bool mounted;
 
+    /**@brief   本次 mount incarnation 的唯一缓存身份。*/
+    uint64_t cache_identity;
+
     /**@brief   Mount point name (@ref ext4_mount)*/
     char name[CONFIG_EXT4_MAX_MP_NAME + 1];
 
@@ -87,6 +90,9 @@ typedef struct ext4_file {
 
     /**@brief   File inode id.*/
     uint32_t inode;
+
+    /**@brief   File inode incarnation generation.*/
+    uint32_t generation;
 
     /**@brief   Open flags.*/
     uint32_t flags;

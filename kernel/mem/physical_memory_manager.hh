@@ -47,6 +47,14 @@ namespace mem
          * 不变。该接口用于 fork/COW 批处理，避免为每个 4K 页重复竞争全局锁。
          */
         static uint64 retain_pages_batch(void *const *pages, uint32 count);
+        /**
+         * @brief 在一次 PMM 锁临界区内归还一批独立单页映射引用。
+         *
+         * pages 中的每个非空项都等价于一次 free_page() 的单页路径：共享页仅
+         * 递减引用，最后一个引用才归还 buddy。该接口不接受连续块分配，主要
+         * 供页表批量撤销使用，避免每个 4 KiB 页重复竞争全局 memlock。
+         */
+        static void release_pages_batch(void *const *pages, uint32 count);
         static uint16 page_ref_count(void *pa); // 查询单页引用计数
         static bool is_managed_page(void *pa); // 判断地址是否属于单页分配器管理范围
         static void free_page1(void *pa, uint64 size); // 释放单个物理页

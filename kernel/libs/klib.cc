@@ -188,47 +188,6 @@ size_t strlen(const char *s) noexcept(true)
 	return len;
 }
 
-float ceilf(float x)
-{
-	union
-	{
-		float f;
-		uint32 i;
-	} u = {x};
-
-	// Extract sign, exponent, and mantissa from x
-	uint32 sign = u.i & 0x80000000;
-	int exponent = (u.i >> 23 & 0xFF) - 127;
-	uint32 mantissa = u.i & 0x7FFFFF;
-
-	// If x is NaN, infinity, or already an integer, return x
-	if (exponent >= 23 || x != x || x == 1.0f / 0.0f || x == -1.0f / 0.0f)
-	{
-		return x;
-	}
-
-	// If x is less than one and not zero, return 1.0 or 0.0 depending on the sign
-	if (exponent < 0)
-	{
-		return sign ? -0.0f : 1.0f;
-	}
-
-	// If the fractional part is zero, return x
-	if ((mantissa & ((1 << (23 - exponent)) - 1)) == 0)
-	{
-		return x;
-	}
-
-	// Otherwise, return the next integer toward positive infinity
-	if (!sign)
-	{
-		u.i += 1 << (23 - exponent);
-	}
-	u.i &= ~((1 << (23 - exponent)) - 1);
-
-	return u.f;
-}
-
 void *operator new[](size_t size, const char *name, int flags, unsigned debugFlags, const char *file, int line)
 {
 	return operator new(size);

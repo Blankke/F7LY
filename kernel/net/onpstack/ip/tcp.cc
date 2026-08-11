@@ -33,6 +33,16 @@
 static void tcp_send_fin(PST_TCPLINK pstLink);
 static void tcpsrv_send_syn_ack_with_start_timer(PST_TCPLINK pstLink, void *pvSrcAddr, USHORT usSrcPort, void *pvDstAddr, USHORT usDstPort);
 
+static UINT tcp_peer_window_bytes(PST_TCPLINK pstLink)
+{
+    UINT unScale = (UCHAR)pstLink->stPeer.bWndScale;
+    if (unScale > 14u)
+        unScale = 14u;
+
+    // 65535 << 14 小于 INT32_MAX；全程无符号计算，避免非法移位和有符号溢出。
+    return ((UINT)pstLink->stPeer.usWndSize) << unScale;
+}
+
 void tcpsrv_syn_recv_timeout_handler(void *pvParam)
 {
     PST_TCPLINK pstLink = (PST_TCPLINK)pvParam;
@@ -546,7 +556,7 @@ INT tcp_send_data(INT nInput, UCHAR *pubData, INT nDataLen, int nWaitAckTimeout)
     //* 首先看看对端的mss能够接收多少数据
     INT nSndDataLen = nDataLen < (INT)pstLink->stPeer.usMSS ? nDataLen : (INT)pstLink->stPeer.usMSS;
     //* 再看看对端的接收窗口是否足够大
-    INT nWndSize = ((INT)pstLink->stPeer.usWndSize) * (INT)pow(2, pstLink->stPeer.bWndScale);
+    INT nWndSize = (INT)tcp_peer_window_bytes(pstLink);
     nSndDataLen = nSndDataLen < nWndSize ? nSndDataLen : nWndSize;
 #endif
 
@@ -1923,7 +1933,7 @@ static BOOL tcp_link_send_data(PST_TCPLINK pstLink)
         {
             if (pstLink->stcbSend.bIsWndSizeUpdated)
             {
-                nPeerWndSize = ((INT)pstLink->stPeer.usWndSize) * (pstLink->stPeer.bWndScale > 0 ? (1 << pstLink->stPeer.bWndScale) : 1);
+                nPeerWndSize = (INT)tcp_peer_window_bytes(pstLink);
                 if (nPeerWndSize > 0)
                     pstLink->stcbSend.bIsZeroWnd = FALSE;
                 pstLink->stcbSend.unWndSize = (UINT)nPeerWndSize;

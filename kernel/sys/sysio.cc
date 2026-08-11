@@ -3,6 +3,8 @@
 #include "fs/vfs/file/file.hh"
 #include "mem/physical_memory_manager.hh"
 #include "mem/virtual_memory_manager.hh"
+#include "libs/perf_diag.hh"
+#include "param.h"
 #include "syscall_defs.hh"
 
 namespace syscall
@@ -12,6 +14,78 @@ namespace syscall
         constexpr long k_direct_user_io_unimplemented = -38;
         constexpr long k_direct_user_read_unimplemented = k_direct_user_io_unimplemented;
         constexpr long k_direct_user_write_unimplemented = k_direct_user_io_unimplemented;
+
+        struct alignas(64) SyscallIoPoolSlot
+        {
+            // 0=空闲，1=已租出。租约不绑定 CPU，任务持有期间即使迁移或
+            // 嵌套进入另一条 I/O 路径，也不会让同一槽被并发复用。
+            uint32 leased = 0;
+            char *data = nullptr;
+        };
+
+        SyscallIoPoolSlot g_syscall_io_pool[NUMCPU]{};
+
+        char *acquire_syscall_io_pool_slot(int &slot_index)
+        {
+            slot_index = -1;
+            for (int index = 0; index < NUMCPU; ++index)
+            {
+                uint32 expected = 0;
+                if (__atomic_compare_exchange_n(&g_syscall_io_pool[index].leased,
+                                                &expected,
+                                                1,
+                                                false,
+                                                __ATOMIC_ACQUIRE,
+                                                __ATOMIC_RELAXED))
+                {
+                    if (g_syscall_io_pool[index].data == nullptr)
+                    {
+                        // 槽首次使用时永久保留一块 64 KiB 未清零缓冲；租约
+                        // 已独占该槽，因此初始化指针无需第二把锁。
+                        g_syscall_io_pool[index].data = static_cast<char *>(
+                            mem::k_pmm.kmalloc_uninitialized(k_syscall_io_chunk_size));
+                        if (g_syscall_io_pool[index].data == nullptr)
+                        {
+                            __atomic_store_n(&g_syscall_io_pool[index].leased,
+                                             0,
+                                             __ATOMIC_RELEASE);
+                            continue;
+                        }
+                        F7LY_PERF_ADD(SysIoTempAlloc, 1);
+                    }
+                    slot_index = index;
+                    return g_syscall_io_pool[index].data;
+                }
+            }
+            return nullptr;
+        }
+
+        void release_syscall_io_pool_slot(int slot_index, char *data)
+        {
+            if (slot_index < 0 || slot_index >= NUMCPU ||
+                data != g_syscall_io_pool[slot_index].data)
+            {
+                panic("sysio: invalid pooled buffer release slot=%d data=%p",
+                      slot_index, data);
+            }
+
+            const uint32 previous =
+                __atomic_exchange_n(&g_syscall_io_pool[slot_index].leased,
+                                    0,
+                                    __ATOMIC_RELEASE);
+            if (previous != 1)
+            {
+                panic("sysio: double pooled buffer release slot=%d data=%p",
+                      slot_index, data);
+            }
+        }
+
+        void record_syscall_temp_buffer_bytes(size_t requested_size)
+        {
+            // bytes 记录实际租用的有效容量，不把池保留的 64 KiB 重复计入；
+            // TempAlloc 则只统计真正发生的 PMM 动态分配。
+            F7LY_PERF_ADD(SysIoTempBytes, requested_size);
+        }
 
         size_t syscall_iovec_buffer_size(const KernelIovec *iovecs, int iovcnt)
         {
@@ -34,7 +108,13 @@ namespace syscall
         {
             size = 1;
         }
-        return mem::k_pmm.kmalloc(size);
+        void *buffer = mem::k_pmm.kmalloc(size);
+        if (buffer != nullptr)
+        {
+            F7LY_PERF_ADD(SysIoTempAlloc, 1);
+            record_syscall_temp_buffer_bytes(size);
+        }
+        return buffer;
     }
 
     void free_syscall_temp_buffer(void *ptr)
@@ -73,7 +153,11 @@ namespace syscall
 
     ScopedSyscallBuffer::~ScopedSyscallBuffer()
     {
-        if (heap_backed_)
+        if (pool_slot_ >= 0)
+        {
+            release_syscall_io_pool_slot(pool_slot_, data_);
+        }
+        else if (heap_backed_)
         {
             free_syscall_temp_buffer(data_);
         }
@@ -81,24 +165,60 @@ namespace syscall
 
     bool ScopedSyscallBuffer::ensure(size_t size)
     {
-        if (data_ != nullptr)
-        {
-            return true;
-        }
         if (size == 0)
         {
             size = 1;
+        }
+        if (data_ != nullptr)
+        {
+            // ensure 的成功必须真的覆盖请求容量，不能让后续完整 copy_in/read
+            // 因复用一个更小的旧缓冲而越界。
+            return size <= capacity_;
         }
 
         if (size <= k_syscall_io_inline_buffer_size)
         {
             data_ = inline_buffer_;
+            capacity_ = k_syscall_io_inline_buffer_size;
             heap_backed_ = false;
         }
         else
         {
-            data_ = static_cast<char *>(alloc_syscall_temp_buffer(size));
-            heap_backed_ = true;
+            bool attempted_pool = false;
+            if (size <= k_syscall_io_chunk_size)
+            {
+                attempted_pool = true;
+                data_ = acquire_syscall_io_pool_slot(pool_slot_);
+            }
+            if (data_ == nullptr)
+            {
+                if (attempted_pool)
+                {
+                    F7LY_PERF_ADD(SysIoPoolMiss, 1);
+                }
+                // 完整 copy_in 或底层 read 会覆盖随后使用的有效区间；池耗尽
+                // 时也不应为 64 KiB 中转页支付无意义的预清零成本。
+                data_ = static_cast<char *>(mem::k_pmm.kmalloc_uninitialized(size));
+                heap_backed_ = data_ != nullptr;
+                pool_slot_ = -1;
+                if (data_ != nullptr)
+                {
+                    F7LY_PERF_ADD(SysIoTempAlloc, 1);
+                }
+            }
+            else
+            {
+                F7LY_PERF_ADD(SysIoPoolHit, 1);
+                capacity_ = k_syscall_io_chunk_size;
+            }
+            if (data_ != nullptr)
+            {
+                if (pool_slot_ < 0)
+                {
+                    capacity_ = size;
+                }
+                record_syscall_temp_buffer_bytes(size);
+            }
         }
         return data_ != nullptr;
     }
@@ -172,6 +292,12 @@ namespace syscall
                 {
                     return total_written > 0 ? total_written : rc;
                 }
+                if (rc > static_cast<long>(want))
+                {
+                    // read 路径同样校验这一底层契约；write 若越界报告完成量，
+                    // 会让 iov 游标越过用户提供的范围并破坏显式 offset。
+                    return total_written > 0 ? total_written : SYS_EIO;
+                }
                 if (rc == 0)
                 {
                     return total_written;
@@ -215,11 +341,22 @@ namespace syscall
                     }
 
                     rc = f->read(reinterpret_cast<uint64>(buffer.data()), want, read_off, upgrade);
+                    if (rc > static_cast<long>(want))
+                    {
+                        // 下层绝不能报告超过传入容量的完成字节；否则即使只按
+                        // rc copy_out，也会把未初始化页尾或相邻内存暴露给用户。
+                        return total_read > 0 ? total_read : SYS_EIO;
+                    }
                     if (rc > 0 &&
                         mem::k_vmm.copy_out(pt, iovecs[i].base + iov_done, buffer.data(), rc) < 0)
                     {
                         return total_read > 0 ? total_read : SYS_EFAULT;
                     }
+                }
+                else if (rc > static_cast<long>(want))
+                {
+                    // 直接 copy_out 实现也必须遵守与 fallback 相同的完成量契约。
+                    return total_read > 0 ? total_read : SYS_EIO;
                 }
                 if (rc < 0)
                 {

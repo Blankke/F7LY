@@ -17,6 +17,7 @@
 #include "tm/timer_manager.hh"
 #include "syscall_handler.hh"
 #include "scheduler.hh"
+#include "proc/file_page_cache.hh"
 #include "slab.hh"
 #include "trap/interrupt_stats.hh"
 #include "shm/shm_manager.hh"
@@ -60,6 +61,7 @@ extern "C" void main(uint64 hartid, uint64 dtb_addr)
 
     mem::k_vmm.init("virtual_memory_manager");
     mem::k_hmm.init("heap_memory_manager", mem::k_pmm.get_heap_area_start(), mem::k_pmm.get_heap_allocator_size());
+    proc::file_page_cache::init();
     shm::k_smm.init(mem::k_pmm.get_shm_start(), mem::k_pmm.get_shm_size()); // 初始化共享内存管理器
 
     mem::SlabAllocator::init(); // 初始化 SlabAllocator

@@ -250,6 +250,117 @@ namespace fs
         }
     }
 
+#if F7LY_PERF_DIAG
+    eastl::string ProcF7lyPerfProvider::generate_content()
+    {
+        using perfdiag::Counter;
+        struct CounterName
+        {
+            Counter counter;
+            const char *name;
+            bool use_max;
+        };
+        static constexpr CounterName counters[] = {
+            {Counter::UserTrap, "trap.user", false},
+            {Counter::Syscall, "syscall.total", false},
+            {Counter::SyscallCycles, "syscall.cycles", false},
+            {Counter::PageFault, "fault.total", false},
+            {Counter::PageFaultCycles, "fault.cycles", false},
+            {Counter::PageTableWalk, "pagetable.walk", false},
+            {Counter::ProcessExit, "process.exit", false},
+            {Counter::ProcessExitCycles, "process.exit_cycles", false},
+            {Counter::VmunmapCall, "vmunmap.calls", false},
+            {Counter::VmunmapPages, "vmunmap.pages", false},
+            {Counter::VmunmapSparsePages, "vmunmap.sparse_pages", false},
+            {Counter::TeardownUnmapPages, "vmunmap.teardown_pages", false},
+            {Counter::TlbFlush, "tlb.flush", false},
+            {Counter::TlbFullFlush, "tlb.full_flush", false},
+            {Counter::TlbRemoteCpu, "tlb.remote_cpus", false},
+            {Counter::PmmAllocPage, "pmm.alloc_pages", false},
+            {Counter::PmmFreePage, "pmm.free_pages", false},
+            {Counter::PmmReleaseRef, "pmm.release_refs", false},
+            {Counter::PmmBatchReleaseRef, "pmm.batch_release_refs", false},
+            {Counter::TrapframeMapCheck, "trapframe.map_checks", false},
+            {Counter::TrapframeRemap, "trapframe.remaps", false},
+            {Counter::FileFault, "file_fault.total", false},
+            {Counter::FileFaultReadBytes, "file_fault.read_bytes", false},
+            {Counter::FileCacheHit, "file_cache.hits", false},
+            {Counter::FileCacheMiss, "file_cache.misses", false},
+            {Counter::FileCacheEvict, "file_cache.evicts", false},
+            {Counter::FileCacheReadaheadPages, "file_cache.readahead_pages", false},
+            {Counter::SysIoPoolHit, "sysio.pool_hits", false},
+            {Counter::SysIoPoolMiss, "sysio.pool_misses", false},
+            {Counter::SysIoTempAlloc, "sysio.temp_allocs", false},
+            {Counter::SysIoTempBytes, "sysio.temp_bytes", false},
+            {Counter::Ext4ReadBytes, "ext4.read_bytes", false},
+            {Counter::Ext4WriteBytes, "ext4.write_bytes", false},
+            {Counter::Ext4LockWaitCycles, "ext4.lock_wait_cycles", false},
+            {Counter::BlockRequest, "block.requests", false},
+            {Counter::BlockRequestBytes, "block.bytes", false},
+            {Counter::BlockWaitCycles, "block.wait_cycles", false},
+            {Counter::BlockMaxInflight, "block.max_inflight", true},
+            {Counter::SchedulerIdle, "scheduler.idle", false},
+            {Counter::SchedulerSwitch, "scheduler.switches", false},
+        };
+
+        eastl::string result;
+        result.reserve(4096);
+        char line[128];
+        for (const CounterName &entry : counters)
+        {
+            const uint64 value = entry.use_max
+                                     ? perfdiag::counter_max(entry.counter)
+                                     : perfdiag::counter_sum(entry.counter);
+            snprintf(line, sizeof(line), "%s %lu\n", entry.name, value);
+            result += line;
+        }
+
+        // 只输出调用次数最高的 16 个 syscall，避免 proc 文件膨胀到数百行。
+        bool emitted[512]{};
+        for (int rank = 0; rank < 16; ++rank)
+        {
+            uint64 best_number = 0;
+            uint64 best_count = 0;
+            for (uint64 number = 0; number < 512; ++number)
+            {
+                if (emitted[number])
+                {
+                    continue;
+                }
+                const uint64 count = perfdiag::syscall_count_sum(number);
+                if (count > best_count)
+                {
+                    best_count = count;
+                    best_number = number;
+                }
+            }
+            if (best_count == 0)
+            {
+                break;
+            }
+            emitted[best_number] = true;
+            snprintf(line,
+                     sizeof(line),
+                     "syscall.%lu count=%lu cycles=%lu\n",
+                     best_number,
+                     best_count,
+                     perfdiag::syscall_cycles_sum(best_number));
+            result += line;
+        }
+        return result;
+    }
+
+    long ProcF7lyPerfProvider::handle_write(uint64, size_t len, long off)
+    {
+        if (off != 0 || len == 0)
+        {
+            return -EINVAL;
+        }
+        perfdiag::reset();
+        return static_cast<long>(len);
+    }
+#endif
+
     // ======================== VirtualContentProvider 基类实现 ========================
     
     eastl::string VirtualContentProvider::read_symlink_target()

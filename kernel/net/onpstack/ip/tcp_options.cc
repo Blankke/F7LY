@@ -114,7 +114,8 @@ static void tcp_options_put_mss(PST_TCPLINK pstLink, UCHAR *pubOption)
 static void tcp_options_put_wnd_scale(PST_TCPLINK pstLink, UCHAR *pubOption)
 {
     PST_TCPOPT_WNDSCALE pstOption = (PST_TCPOPT_WNDSCALE)pubOption;
-    pstLink->stPeer.bWndScale = pstOption->bScale;
+    UCHAR ubScale = (UCHAR)pstOption->bScale;
+    pstLink->stPeer.bWndScale = (CHAR)(ubScale > 14u ? 14u : ubScale);
 }
 
 static void tcp_options_put_sack(PST_TCPLINK pstLink, UCHAR *pubOption)

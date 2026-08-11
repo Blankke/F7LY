@@ -14,6 +14,7 @@
 #include "virtual_memory_manager.hh"
 #include "proc/prlimit.hh"
 #include "proc/signal.hh"
+#include "proc/file_page_cache.hh"
 #include "proc_manager.hh"
 
 #define min(a, b) ((a) < (b) ? (a) : (b))
@@ -234,6 +235,39 @@ namespace
 		return has_dirty;
 	}
 
+	class FilePageMutationGuard
+	{
+	public:
+		FilePageMutationGuard(fs::file &file, uint64 offset, uint64 length)
+			: offset_(offset), length_(length)
+		{
+			active_ = length_ != 0 && file.get_file_page_cache_identity(identity_);
+			if (active_)
+			{
+				// begin 在 epoch shard 内同时推进 sequence 和关闭门禁。
+				active_ = proc::file_page_cache::begin_mutation(identity_, offset_, length_);
+			}
+		}
+
+		~FilePageMutationGuard()
+		{
+			if (active_)
+			{
+				// end 在重新打开门禁前再摘页并推进 sequence。
+				proc::file_page_cache::end_mutation(identity_, offset_, length_);
+			}
+		}
+
+		FilePageMutationGuard(const FilePageMutationGuard &) = delete;
+		FilePageMutationGuard &operator=(const FilePageMutationGuard &) = delete;
+
+	private:
+		fs::FilePageCacheIdentity identity_{};
+		uint64 offset_ = 0;
+		uint64 length_ = 0;
+		bool active_ = false;
+	};
+
 }
 
 namespace fs
@@ -415,6 +449,39 @@ namespace fs
 		_read_snapshot_size = 0;
 		release_write_combine_buffer(_read_snapshot_buffer);
 		_read_snapshot_buffer = nullptr;
+	}
+
+	bool normal_file::get_file_page_cache_identity(FilePageCacheIdentity &identity) const
+	{
+		if (lwext4_file_struct.mp == nullptr ||
+			lwext4_file_struct.mp->cache_identity == 0 ||
+			lwext4_file_struct.inode == 0)
+		{
+			return false;
+		}
+		identity.mount_identity = lwext4_file_struct.mp->cache_identity;
+		identity.inode = lwext4_file_struct.inode;
+		identity.inode_generation = lwext4_file_struct.generation;
+		return true;
+	}
+
+	bool normal_file::file_page_cache_is_clean() const
+	{
+		_file_lock.acquire();
+		const bool locally_clean = !_write_combine_dirty;
+		_file_lock.release();
+		return locally_clean &&
+			   !normal_file_has_delayed_visibility_state(backing_path());
+	}
+
+	void normal_file::invalidate_global_page_cache_range_locked(uint64 offset,
+													  uint64 length)
+	{
+		FilePageCacheIdentity identity{};
+		if (get_file_page_cache_identity(identity))
+		{
+			proc::file_page_cache::invalidate_range(identity, offset, length);
+		}
 	}
 
 	void normal_file::release_clean_write_combine_buffer_locked()
@@ -685,6 +752,9 @@ namespace fs
 		{
 			return EOK;
 		}
+		FilePageMutationGuard cache_mutation(*this,
+									 static_cast<uint64>(off),
+									 len);
 
 		const long logical_pos = _file_ptr;
 		if (_unlinked_from_dir)
@@ -844,8 +914,9 @@ namespace fs
 
 		uint64 current_size = logical_file_size_locked();
 		uint64 gap_size = target_off > static_cast<long>(current_size)
-							  ? static_cast<uint64>(target_off) - current_size
-							  : 0;
+								  ? static_cast<uint64>(target_off) - current_size
+								  : 0;
+		FilePageMutationGuard cache_mutation(*this, current_size, gap_size);
 
 		// ext4 支持稀疏文件。扩大 inode size 即可形成逻辑零洞，不能为大偏移
 		// 逐字节写零，否则 openat(O_LARGEFILE) 一次 4GiB seek 就会耗尽整个镜像。
@@ -1424,6 +1495,9 @@ namespace fs
 		}
 
 		invalidate_read_snapshot_locked();
+		FilePageMutationGuard cache_mutation(*this,
+									 static_cast<uint64>(off),
+									 len);
 		uint64 cache_offset = static_cast<uint64>(off) - _write_combine_base;
 		uint64 write_end = cache_offset + len;
 		if (write_end > _write_combine_size)
@@ -1572,6 +1646,9 @@ namespace fs
 			int cache_status = prepare_small_write_cache_locked(off, len);
 			if (cache_status == EOK)
 			{
+				FilePageMutationGuard cache_mutation(*this,
+										 static_cast<uint64>(off),
+										 len);
 				uint64 cache_offset = static_cast<uint64>(off) - _write_combine_base;
 				uint64 write_end = cache_offset + len;
 				if (write_end > _write_combine_size)
@@ -1659,6 +1736,9 @@ namespace fs
 				_write_combine_size = 0;
 			}
 
+			FilePageMutationGuard cache_mutation(*this,
+										 static_cast<uint64>(off),
+										 len);
 			memmove(_write_combine_buffer + _write_combine_size, kbuf, len);
 			_write_combine_size += len;
 			mark_write_combine_dirty_locked();
@@ -1847,8 +1927,14 @@ namespace fs
 
 	void normal_file::invalidate_cached_file_data()
 	{
+		invalidate_cached_file_range(0, ~static_cast<uint64>(0));
+	}
+
+	void normal_file::invalidate_cached_file_range(uint64 offset, uint64 length)
+	{
 		_file_lock.acquire();
 		invalidate_read_snapshot_locked();
+		invalidate_global_page_cache_range_locked(offset, length);
 		_file_lock.release();
 	}
 

@@ -10,6 +10,7 @@
 #include "fs/lwext4/ext4_errno.hh"
 #include "libs/string.hh"
 #include "mem/physical_memory_manager.hh"
+#include "libs/perf_diag.hh"
 
 namespace
 {
@@ -284,6 +285,15 @@ static int blockdev_rw_common(struct ext4_blockdev *bdev,
         if (rc != EOK)
         {
             return rc;
+        }
+
+        if (write)
+        {
+            F7LY_PERF_ADD(Ext4WriteBytes, chunk_bytes);
+        }
+        else
+        {
+            F7LY_PERF_ADD(Ext4ReadBytes, chunk_bytes);
         }
 
         if (!write)

@@ -13,6 +13,8 @@
 #include "fs/vfs/virtual_fs.hh"
 #include "proc/capability.hh"
 #include "proc_manager.hh" // 用于访问当前进程的umask
+#include "proc/file_page_cache.hh"
+#include "proc/process_memory_manager.hh"
 #include "fs/lwext4/ext4.hh"
 #include "fs/vfs/vfs_ext4_ext.hh" // 包含 NS_to_S 宏
 #include "tm/time.h"              // 包含 TIME2NS 宏
@@ -3059,15 +3061,49 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
 	        fs::normal_file *temp_file = new fs::normal_file(attrs, actual_path);
 	        // printfYellow("vfs_openat: flags: %o, mode: 0%o, actual_path: %s\n", flags, temp_file->_attrs.transMode(), actual_path.c_str());
 
-	        // ext4库会自动处理 O_TRUNC, O_RDONLY, O_WRONLY, O_RDWR 等标志
-	        // 真是前人栽树，后人乘凉啊！
-	        status = ext4_fopen2(&temp_file->lwext4_file_struct, actual_path.c_str(), flags);
+	        // O_TRUNC 拆成 open + cache pre-invalidate + truncate + post-invalidate，
+	        // 避免 ext4 已截断、VFS 尚未失效之间的旧页命中窗口。
+	        const int ext4_open_flags = flags & ~O_TRUNC;
+	        status = ext4_fopen2(&temp_file->lwext4_file_struct,
+	                            actual_path.c_str(),
+	                            ext4_open_flags);
         if (status != EOK)
         {
             delete temp_file;
             printfRed("ext4_fopen2 failed with status: %d for path: %s\n", status, actual_path.c_str());
             return -status;
         }
+		if ((flags & O_TRUNC) != 0)
+		{
+			fs::FilePageCacheIdentity truncate_identity{};
+			const bool cache_mutation =
+				temp_file->get_file_page_cache_identity(truncate_identity) &&
+				proc::file_page_cache::begin_mutation(
+					truncate_identity, 0, ~static_cast<uint64>(0));
+			temp_file->invalidate_cached_file_data();
+			status = ext4_ftruncate(&temp_file->lwext4_file_struct, 0);
+			temp_file->invalidate_cached_file_data();
+			if (cache_mutation)
+			{
+				proc::file_page_cache::end_mutation(
+					truncate_identity, 0, ~static_cast<uint64>(0));
+			}
+			if (status != EOK)
+			{
+				delete temp_file;
+				printfRed("ext4_ftruncate during open failed with status: %d for path: %s\n",
+				          status,
+				          actual_path.c_str());
+				return -status;
+			}
+			if (cache_mutation)
+			{
+				// mutation 门禁已打开，fault 按新 EOF 重读；
+				// syscall 返回前必须同步撤销所有 mm 的旧驻留页。
+				proc::invalidate_resident_file_mappings_after_shrink(
+					truncate_identity, 0);
+			}
+		}
 
         // 如果是新创建的文件，设置文件权限到 ext4 inode
         bool is_newly_created = !file_exists && (flags & O_CREAT);
@@ -4854,9 +4890,26 @@ int vfs_truncate(fs::file *f, size_t length)
     if (length != current_size)
     {
         uint64 old_size = current_size;
+        fs::FilePageCacheIdentity truncate_identity{};
+        const bool cache_mutation =
+            f->get_file_page_cache_identity(truncate_identity) &&
+            proc::file_page_cache::begin_mutation(
+                truncate_identity, 0, ~static_cast<uint64>(0));
+        auto finish_cache_mutation = [&]()
+        {
+            if (cache_mutation)
+            {
+                proc::file_page_cache::end_mutation(
+                    truncate_identity, 0, ~static_cast<uint64>(0));
+            }
+        };
+        // pre/post 失效分别封住旧 hit 与并发 miss candidate。
+        f->invalidate_cached_file_data();
         int status = ext4_ftruncate(&f->lwext4_file_struct, length);
         if (status != EOK)
         {
+            f->invalidate_cached_file_data();
+            finish_cache_mutation();
             printfRed("vfs_truncate: failed to truncate file %s to size %zu, error: %d\n",
                       f->_path_name.c_str(), length, status);
             return -status;
@@ -4864,6 +4917,8 @@ int vfs_truncate(fs::file *f, size_t length)
         status = zero_small_truncate_extension(f, old_size, length);
         if (status != EOK)
         {
+            f->invalidate_cached_file_data();
+            finish_cache_mutation();
             printfRed("vfs_truncate: failed to zero extension for %s old=%p new=%p, error: %d\n",
                       f->_path_name.c_str(), (void *)old_size, (void *)length, status);
             return -status;
@@ -4872,6 +4927,14 @@ int vfs_truncate(fs::file *f, size_t length)
 	        f->lwext4_file_struct.fsize = length;
 	        f->invalidate_cached_file_data();
 	        f->sync_memfd_size_from_file();
+	        finish_cache_mutation();
+	        if (cache_mutation && length < old_size)
+	        {
+	            // partial EOF 也从所在页起整页 zap，下次 fault
+	            // 重读有效前缀并精确清零新 EOF 后的页尾。
+	            proc::invalidate_resident_file_mappings_after_shrink(
+	                truncate_identity, length);
+	        }
 	        return EOK;
 	    }
     return EOK;

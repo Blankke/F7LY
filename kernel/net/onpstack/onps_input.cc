@@ -263,7 +263,7 @@ INT onps_input_new_tcp_remote_client(INT nInputSrv, USHORT usSrvPort, void *pvSr
     }
 
     //* 内存使用率超过70%就不再接受新的客户端连接，以确保原有链路的通讯不受到影响
-    if ((FLOAT)0.7 < buddy_usage())
+    if (buddy_used_bytes() > (BUDDY_MEM_SIZE * 7u) / 10u)
     {
         if (penErr)
             *penErr = ERRNOFREEMEM;

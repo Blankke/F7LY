@@ -25,6 +25,7 @@
 #include "fs/vfs/virtual_fs.hh"
 #include "hal/tlb_shootdown.hh"
 #include "devs/dtb.hh"
+#include "libs/perf_diag.hh"
 extern char etext[]; // kernel.ld sets this to end of kernel code.
 
 extern char trampoline[]; // trampoline.S
@@ -876,6 +877,8 @@ namespace mem
     /// @return 成功返回0，失败返回-1
     int VirtualMemoryManager::allocate_vma_page(PageTable &pt, uint64 va, proc::vma *vm, int access_type)
     {
+        F7LY_PERF_ADD(PageFault, 1);
+        perfdiag::CycleScope perf_fault_scope(perfdiag::Counter::PageFaultCycles);
         uint64 page_va = PGROUNDDOWN(va);
 
         // 线程并发 fault 同一页时，另一个线程可能已经先一步把叶子 PTE 补好了。
@@ -1549,25 +1552,31 @@ namespace mem
 #endif
     }
 
-    void VirtualMemoryManager::vmunmap(PageTable &pt, uint64 va, uint64 npages, int do_free)
+    void VirtualMemoryManager::vmunmap(PageTable &pt,
+                                       uint64 va,
+                                       uint64 npages,
+                                       int do_free,
+                                       UnmapTlbMode tlb_mode)
     {
+        F7LY_PERF_ADD(VmunmapCall, 1);
+        F7LY_PERF_ADD(VmunmapPages, npages);
+        if (tlb_mode == UnmapTlbMode::SkipInactiveFinalTeardown)
+        {
+            F7LY_PERF_ADD(TeardownUnmapPages, npages);
+        }
         // printfCyan("vmunmap: va: %p, npages: %d, do_free: %d\n", va, npages, do_free);
         uint64 a;
         Pte pte;
 
-        struct PendingUnmap
-        {
-            void *page = nullptr;
-        };
         /*
          * 单次保留 256 个待释放物理页只占 2 KiB 内核栈，仍明显低于 16 KiB
          * 进程内核栈上限。RISC-V 超过 64 页时本地已退化为一次全 TLB
          * sfence，LoongArch 对任意范围也都会全量失效；扩大批次不会增加
          * 单次硬件失效成本，却能让 jemalloc 大 arena 的 MADV_DONTNEED
          * 少做最多四分之三的跨核 IPI 与确认等待。
-         */
+        */
         constexpr int k_unmap_batch_pages = 256;
-        PendingUnmap pending[k_unmap_batch_pages]{};
+        void *pending[k_unmap_batch_pages]{};
         int pending_count = 0;
         uint64 pending_start = 0;
         uint64 pending_end = 0;
@@ -1577,16 +1586,15 @@ namespace mem
             {
                 return;
             }
-            // PTE 已全部撤销；同步等待每个 online CPU 失效后，才允许这些
-            // 物理页回到 buddy 并被其它地址空间复用。
-            flush_user_pt_range(pt, pending_start, pending_end - pending_start);
-            for (int index = 0; index < pending_count; ++index)
+            if (tlb_mode == UnmapTlbMode::Invalidate)
             {
-                if (pending[index].page != nullptr)
-                {
-                    k_pmm.free_page(pending[index].page);
-                }
+                // PTE 已全部撤销；同步等待可能运行该地址空间的 CPU 失效后，
+                // 才允许这些物理页回到 buddy 并被其它地址空间复用。
+                flush_user_pt_range(pt, pending_start, pending_end - pending_start);
             }
+            // 最终销毁快路径由 ProcessMemoryManager 在 ref_count==0、active
+            // CPU mask==0 后显式开启；对应 ASID 在全核屏障前不会被复用。
+            k_pmm.release_pages_batch(pending, static_cast<uint32>(pending_count));
             pending_count = 0;
         };
 
@@ -1632,13 +1640,98 @@ namespace mem
                 pending_start = a;
             }
             pending_end = a + PGSIZE;
-            pending[pending_count++].page = old_page;
+            pending[pending_count++] = old_page;
             if (pending_count == k_unmap_batch_pages)
             {
                 flush_pending();
             }
         }
         flush_pending();
+    }
+
+    void VirtualMemoryManager::vmunmap_sparse(PageTable &pt,
+                                              const uint64 *addresses,
+                                              uint32 count,
+                                              int do_free,
+                                              UnmapTlbMode tlb_mode)
+    {
+        F7LY_PERF_ADD(VmunmapCall, 1);
+        F7LY_PERF_ADD(VmunmapSparsePages, count);
+        if (tlb_mode == UnmapTlbMode::SkipInactiveFinalTeardown)
+        {
+            F7LY_PERF_ADD(TeardownUnmapPages, count);
+        }
+        constexpr uint32 k_unmap_batch_pages = 256;
+        if (addresses == nullptr || count == 0)
+        {
+            return;
+        }
+        if (count > k_unmap_batch_pages)
+        {
+            panic("vmunmap_sparse: too many pages: %u", count);
+        }
+
+        void *pending[k_unmap_batch_pages]{};
+        uint32 pending_count = 0;
+        uint64 flush_start = ~0ULL;
+        uint64 flush_end = 0;
+
+        for (uint32 index = 0; index < count; ++index)
+        {
+            const uint64 va = addresses[index];
+            if ((va % PGSIZE) != 0)
+            {
+                panic("vmunmap_sparse: not aligned va=%p", va);
+            }
+
+#ifdef RISCV
+            const bool is_fixed_special_page =
+                va == TRAMPOLINE || va == SIG_TRAMPOLINE || va == TRAPFRAME;
+#elif defined(LOONGARCH)
+            const bool is_fixed_special_page =
+                va == SIG_TRAMPOLINE || va == TRAPFRAME;
+#endif
+            const bool is_user_trapframe_page =
+                va >= USER_TRAPFRAME_BASE && va < USER_TRAPFRAME_TOP;
+            if (is_fixed_special_page || is_user_trapframe_page)
+            {
+                // 稀疏接口服务普通 resident overlay；固定映射仍由其专用单页
+                // 生命周期路径拆除，避免一个坏索引顺手破坏 trap 返回环境。
+                continue;
+            }
+
+            Pte pte = pt.walk(va, false);
+            if (pte.is_null() || !pte.is_valid())
+            {
+                continue;
+            }
+
+            pending[pending_count++] = do_free
+                                           ? page_pa_to_kernel_ptr(
+                                                 reinterpret_cast<uint64>(pte.pa()))
+                                           : nullptr;
+            pte.clear_data();
+            if (va < flush_start)
+            {
+                flush_start = va;
+            }
+            if (va + PGSIZE > flush_end)
+            {
+                flush_end = va + PGSIZE;
+            }
+        }
+
+        if (pending_count == 0)
+        {
+            return;
+        }
+        if (tlb_mode == UnmapTlbMode::Invalidate)
+        {
+            // 地址无序时按包围区间保守失效；RISC-V 大于 64 页会自动退化为
+            // 单次 ASID 全失效，仍远少于逐页 shootdown。
+            flush_user_pt_range(pt, flush_start, flush_end - flush_start);
+        }
+        k_pmm.release_pages_batch(pending, pending_count);
     }
 
     PageTable VirtualMemoryManager::vm_create()

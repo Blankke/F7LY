@@ -44,6 +44,6 @@ BUDDY_EXT BOOL buddy_init(EN_ONPSERR *penErr);				    //* buddy模块初始化�
 BUDDY_EXT void buddy_uninit(void);                              //* buddy模块去初始化函数
 BUDDY_EXT void *buddy_alloc(UINT unSize, EN_ONPSERR *penErr);   //* 只有没有可用的内存块了才会返回NULL，其它情况都会返回一个合适大小的内存块
 BUDDY_EXT BOOL buddy_free(void *pvStart);                       //* 释放由buddy_alloc分配的内存
-BUDDY_EXT FLOAT buddy_usage(void); 
-BUDDY_EXT FLOAT buddy_usage_details(UINT *punTotalBytes, UINT *punUsedBytes, UINT *punMaxFreedPageSize, UINT *punMinFreedPageSize);
+BUDDY_EXT UINT buddy_used_bytes(void);
+BUDDY_EXT void buddy_usage_details(UINT *punTotalBytes, UINT *punUsedBytes, UINT *punMaxFreedPageSize, UINT *punMinFreedPageSize);
 #endif

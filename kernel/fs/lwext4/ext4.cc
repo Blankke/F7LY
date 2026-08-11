@@ -131,6 +131,7 @@ static struct ext4_block_devices s_bdevices[CONFIG_EXT4_BLOCKDEVS_COUNT];
 
 /**@brief   Mountpoints.*/
 static struct ext4_mountpoint s_mp[CONFIG_EXT4_MOUNTPOINTS_COUNT];
+static uint64_t s_next_mount_cache_identity = 1;
 
 namespace
 {
@@ -690,6 +691,9 @@ int ext4_mount(const char *dev_name, const char *mount_point, bool read_only)
     }
 
     bd->fs = &mp->fs;
+    mp->cache_identity = __atomic_fetch_add(&s_next_mount_cache_identity, 1, __ATOMIC_RELAXED);
+    if (mp->cache_identity == 0)
+        mp->cache_identity = __atomic_fetch_add(&s_next_mount_cache_identity, 1, __ATOMIC_RELAXED);
     mp->mounted = 1;
     return r;
 }
@@ -1438,6 +1442,7 @@ static int ext4_generic_open2(ext4_file *f, const char *path, int flags, int fty
         f->mp = mp;
         f->fsize = ext4_inode_get_size(sb, ref.inode);
         f->inode = ref.index;
+        f->generation = ext4_inode_get_generation(ref.inode);
         f->fpos = 0;
 
         if (f->flags & O_APPEND)
@@ -2184,6 +2189,7 @@ int ext4_fclose(ext4_file *file)
     file->mp = 0;
     file->flags = 0;
     file->inode = 0;
+    file->generation = 0;
     file->fpos = file->fsize = 0;
 
     return EOK;

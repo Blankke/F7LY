@@ -355,8 +355,8 @@ namespace eastl
 			{ return (size_type)(mHash(k) % kBucketCount); }
 
 	public:
-		float load_factor() const EA_NOEXCEPT
-			{ return (float)mnElementCount / (float)kBucketCount; }
+		hash_load_factor load_factor() const EA_NOEXCEPT
+			{ return hash_load_factor((uint32_t)mnElementCount, (uint32_t)kBucketCount); }
 
 	public:
 		insert_return_type insert(value_type& value) 

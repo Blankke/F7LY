@@ -28,6 +28,7 @@
 #include "proc/futex.hh"
 #include "asm.hh"
 #include "hal/tlb_shootdown.hh"
+#include "libs/perf_diag.hh"
 // in kernelvec.S, calls kerneltrap().
 extern "C" void kernelvec();
 extern "C" void uservec();
@@ -271,6 +272,7 @@ void trap_manager::timertick()
 // !!写完进程后修改
 void trap_manager::usertrap()
 {
+  F7LY_PERF_ADD(UserTrap, 1);
   // printfMagenta("==usertrap==\n");
 
   int which_dev = 0;
@@ -519,63 +521,82 @@ void trap_manager::usertrapret(void)
           p ? (int)p->_state : -1,
           p ? (int)p->_exiting : -1);
   }
-  if (!p->get_memory_manager()->ensure_special_mappings())
+  proc::ProcessMemoryManager *mm = p->get_memory_manager();
+  if (p->_exiting || mm->inactive_final_teardown)
   {
-    panic("usertrapret: failed to ensure special mappings pid=%d tid=%d state=%d pt=%p",
+    // 退出任务在最终 VMA/文件回收期间可能 sleep；恢复执行只允许继续内核
+    // 清理，禁止重新激活或返回已经开始拆除的用户地址空间。
+    panic("usertrapret: refusing exiting/final-teardown task pid=%d tid=%d exiting=%d final=%d mm=%p",
           p->_pid,
           p->_tid,
-          (int)p->_state,
-          (void *)p->get_pagetable()->get_base());
+          (int)p->_exiting,
+          (int)mm->inactive_final_teardown,
+          mm);
   }
-
   // CLONE_VM 线程共享 PGDL，但每个 PCB 有独立 trapframe 物理页。固定复用
   // TRAPFRAME 会让两个核并发返回用户态时覆盖同一 PTE；使用 PCB 槽位专属 VA，
   // 并将这个地址传给 userret/SAVE0 后即可让各线程完全隔离。
   intr_off();
-  const uint64 user_trapframe_va = USER_TRAPFRAME(p->get_global_id());
-
-  // 同一线程的大多数 syscall 不应反复拆装自己的 trapframe PTE；这不仅浪费
-  // TLB，也会让多个 CLONE_VM 线程在第一次并发返回时竞争页表层级创建。仅在
-  // PCB 槽位复用后物理页变化时替换映射，并以全局页表更新锁保护“检查+建表”。
   mem::PageTable *user_pt = p->get_pagetable();
+  const uint64 user_pt_base = user_pt->get_base();
+  const uint64 user_trapframe_va = USER_TRAPFRAME(p->get_global_id());
   const uint64 expected_trapframe_pa =
       PGROUNDDOWN(to_phy(reinterpret_cast<uint64>(p->get_trapframe())));
-  mem::Pte trapframe_pte = user_pt->walk(user_trapframe_va, false);
-  bool trapframe_mapping_matches =
-      !trapframe_pte.is_null() && trapframe_pte.is_valid() &&
-      reinterpret_cast<uint64>(trapframe_pte.pa()) == expected_trapframe_pa;
 
-  if (!trapframe_mapping_matches)
+  // mm、页表根和 trapframe 物理页不变时，保留 PTE 不会被普通用户映射路径
+  // 修改。稳定 syscall 返回直接命中 PCB 缓存；仅生命周期边界进入锁内慢路径。
+  bool trapframe_mapping_changed = false;
+  F7LY_PERF_ADD(TrapframeMapCheck, 1);
+  if (!p->trapframe_mapping_cache_matches(mm,
+                                          user_pt_base,
+                                          expected_trapframe_pa))
   {
     mem::k_vmm.lock_page_table_updates();
-    trapframe_pte = user_pt->walk(user_trapframe_va, false);
-    trapframe_mapping_matches =
-        !trapframe_pte.is_null() && trapframe_pte.is_valid() &&
-        reinterpret_cast<uint64>(trapframe_pte.pa()) == expected_trapframe_pa;
+    const bool special_mappings_ok = mm->ensure_special_mappings();
     bool mapped = true;
-    if (!trapframe_mapping_matches)
+    if (special_mappings_ok)
     {
-      // PCB 槽位复用时可能仍留有历史映射；锁内仅替换当前槽位，其他线程的
-      // trapframe PTE 不会被触碰。
-      mem::k_vmm.vmunmap(*user_pt, user_trapframe_va, 1, 0);
-      mapped = mem::k_vmm.map_pages(*user_pt,
-                                    user_trapframe_va,
-                                    PGSIZE,
-                                    (uint64)p->get_trapframe(),
-                                    PTE_V | PTE_NX | PTE_P | PTE_W | PTE_R | PTE_MAT | PTE_D);
+      mem::Pte trapframe_pte = user_pt->walk(user_trapframe_va, false);
+      const bool trapframe_mapping_matches =
+          !trapframe_pte.is_null() && trapframe_pte.is_valid() &&
+          reinterpret_cast<uint64>(trapframe_pte.pa()) == expected_trapframe_pa;
+      if (!trapframe_mapping_matches)
+      {
+        F7LY_PERF_ADD(TrapframeRemap, 1);
+        // PCB 槽位复用时可能仍留有历史映射；锁内仅替换当前槽位，其他线程的
+        // trapframe PTE 不会被触碰。
+        mem::k_vmm.vmunmap(*user_pt, user_trapframe_va, 1, 0);
+        mapped = mem::k_vmm.map_pages(*user_pt,
+                                      user_trapframe_va,
+                                      PGSIZE,
+                                      (uint64)p->get_trapframe(),
+                                      PTE_V | PTE_NX | PTE_P | PTE_W | PTE_R | PTE_MAT | PTE_D);
+        trapframe_mapping_changed = mapped;
+      }
     }
     mem::k_vmm.unlock_page_table_updates();
+    if (!special_mappings_ok)
+    {
+      panic("usertrapret: failed to ensure special mappings pid=%d tid=%d state=%d pt=%p",
+            p->_pid,
+            p->_tid,
+            (int)p->_state,
+            (void *)user_pt_base);
+    }
     if (!mapped)
     {
       panic("usertrapret: failed to map trapframe");
     }
+    p->cache_trapframe_mapping(mm, user_pt_base, expected_trapframe_pa);
   }
   // trapframe 是 trap 入口切换回内核页表前唯一需要读取的用户页表映射。
-  // 保留 ASID+VA 精确失效作为 PCB/页表复用边界的最后一道保护；它不会像
-  // 旧的 invtlb op0 那样清空本 CPU 的全部用户翻译。
-  hal::tlb::enter_mm(*p->get_memory_manager());
-  const uint32 user_asid = loongarch_user_asid(p->get_memory_manager());
-  loongarch_invalidate_user_tlb_page(user_asid, user_trapframe_va);
+  // 仅实际改写 PTE 时做 ASID+VA 精确失效；稳定 syscall 返回不再执行 invtlb。
+  hal::tlb::enter_mm(*mm);
+  const uint32 user_asid = loongarch_user_asid(mm);
+  if (trapframe_mapping_changed)
+  {
+    loongarch_invalidate_user_tlb_page(user_asid, user_trapframe_va);
+  }
 
   // send syscalls, interrupts, and exceptions to uservec.S
   w_csr_eentry((uint64)uservec); // maybe todo
@@ -604,7 +625,7 @@ void trap_manager::usertrapret(void)
   w_csr_era(p->get_trapframe()->era);
 
   // tell uservec.S the user page table to switch to.
-  volatile uint64 pgdl = (p->get_pagetable()->get_base());
+  volatile uint64 pgdl = user_pt_base;
 
   // jump to uservec.S at the top of memory, which
   // switches to the user page table, restores user registers,

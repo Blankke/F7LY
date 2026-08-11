@@ -53,15 +53,21 @@ namespace syscall
         ScopedSyscallBuffer() = default;
         explicit ScopedSyscallBuffer(size_t size);
         ~ScopedSyscallBuffer();
+        ScopedSyscallBuffer(const ScopedSyscallBuffer &) = delete;
+        ScopedSyscallBuffer &operator=(const ScopedSyscallBuffer &) = delete;
 
         bool valid() const { return data_ != nullptr; }
         bool ensure(size_t size);
         char *data() { return data_; }
 
     private:
+        // 非 inline 缓冲来自可迁移的全局租约池或未清零 PMM 回退。调用方必须
+        // 在把内容交给下层/用户前完整覆盖对应有效区间，并只传播实际完成字节。
         alignas(16) char inline_buffer_[k_syscall_io_inline_buffer_size];
         char *data_ = nullptr;
+        size_t capacity_ = 0;
         bool heap_backed_ = false;
+        int pool_slot_ = -1;
     };
 
     int copy_user_iovecs(mem::PageTable &pt, uint64 iov_ptr, int iovcnt, KernelIovec *iovecs, size_t *total_len);

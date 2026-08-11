@@ -293,6 +293,9 @@ Starry 的经验说明：F7LY 当前最需要补的是“容量、并发、回�
 - [x] 2026-08-01 原 `Compiling core` futex 卡死修复完成待验收：以修复前/后的 8 vCPU GDB 全核栈确认并消除 futex 全局锁与 PCB 锁的 ABBA；WAIT/WAKE 使用同一规范锁序，futex key 改为原子预筛选发布。RV/LA 四个 futex 语义小测结果一致，未跳过 crate、未降低 QEMU 核数，也未按测例增加特判。
 - [x] 2026-08-09 BuildStorm 停顿诊断与代码修复完成待完整验收：已完成当前 HEAD 8/1 vCPU 与 `a40074f6^` 独立 worktree 的有界对照、间隔 GDB/计数器快照；按证据完成地址空间定向 TLB、ext4/bcache、futex/普通 wait channel、调度候选扫描、特殊映射和退出回收链路修复，并保留默认关闭的诊断框架与宿主探针。
 - [x] 2026-08-09 修复后受控结果：官方进度探针在 `logs/run/output_r_20260809-073601_buildstorm-perf.txt` 中进入 `core v0.0.0` 并生成产物，但在 1200 秒窗口内仍未出现后续 `Compiling`；因此“根因链代码修复”与“完整 BuildStorm 成功”分开记录，后者继续待用户验收。
+- [x] 2026-08-11 第一阶段性能优化已完成待验收：地址空间批量 teardown、文件页缓存、复用 syscall 缓冲、默认关闭的性能计数与正式探针、内核无浮点 ABI/指令门禁均已收口；后续短跑暴露并修复了 freestanding 内核未执行文件页缓存全局构造器、以及 exec 换映像时旧 mm 最终清理被误当作非法退出两个 panic。RV/LA evaluation 构建和无浮点门禁通过；RV 3 分钟定向短验证中 CAgent 10/10 完成，BuildStorm 通过 toolchain/minibuild/预热并进入正式并行 crate 编译，无 panic/assert/kerneltrap。本轮未运行 Docker 或完整 BuildStorm，完整正确性与性能数据仍待后续人工长验收。
+- [x] 2026-08-11 clone 缺页锁生命周期修复完成待长验收：GDB 证实 `CLONE_CHILD_SETTID` 在持有未发布子 PCB 自旋锁时触发 `copy_out -> fault_page -> memory_lock sleep`，导致 scheduler 的 `num_off==1` 不变量失败。现子任务保持 `USED`，`CHILD/PARENT_SETTID` 用户写入在不持子 PCB 锁时完成，再一次性发布 `RUNNABLE`；创建失败回滚也不再带非当前 PCB 锁进入可睡眠资源清理。RV 5 分钟原路径复跑越过 `libc v0.2.186`，继续编译到 `ax-posix-api`，无 panic/assert/kerneltrap；未替代完整 BuildStorm 长验收。
+- [x] 2026-08-11 mm 最后引用并发归还修复完成待长验收：`free_all_memory()` 的本次原子 `fetch_sub` 结果现在唯一决定最终清理与 `delete` 所有权，PCB 在归还前先摘掉 mm 指针，创建失败和 exec 回滚也使用同一契约，消除非最后线程误删正在 teardown 的 mm 及持有者误计泄漏窗口。RV 24 轮×8 线程原始 `SYS_exit` 竞态专项通过，无 panic/引用漂移/最终销毁断言；RV/LA evaluation 构建与无浮点门禁通过，未运行完整 BuildStorm。
 - [ ] 待完成：在不受其它 QEMU 抢占的环境中跑完 RV/LA 官方完整 BuildStorm，记录最终产物、总耗时和至少两次重复数据；当前结果只证明冷启动与前段编译显著加速，不宣称完整 446 项构建已经通过。
 
 ## 6. 内核能力验收门槛

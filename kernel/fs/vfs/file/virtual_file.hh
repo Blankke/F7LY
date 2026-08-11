@@ -4,6 +4,7 @@
 #include <EASTL/string.h>
 #include <EASTL/unique_ptr.h>
 #include "proc/proc.hh"
+#include "libs/perf_diag.hh"
 
 namespace mem
 {
@@ -148,6 +149,22 @@ namespace fs
             return eastl::make_unique<ProcSelfCmdlineProvider>();
         }
     };
+
+#if F7LY_PERF_DIAG
+    /** `/proc/f7ly/perf`：仅诊断内核可见的动态性能计数快照。 */
+    class ProcF7lyPerfProvider : public VirtualContentProvider
+    {
+    public:
+        eastl::string generate_content() override;
+        bool is_dynamic() const override { return true; }
+        bool is_writable() const override { return true; }
+        long handle_write(uint64 buf, size_t len, long off) override;
+        eastl::unique_ptr<VirtualContentProvider> clone() const override
+        {
+            return eastl::make_unique<ProcF7lyPerfProvider>();
+        }
+    };
+#endif
 
     // /proc/uptime 直接使用 CLOCK_BOOTTIME，不缩放、不伪造时间。
     class ProcUptimeProvider : public VirtualContentProvider

@@ -6,6 +6,7 @@
 #include "param.h"
 #include "printer.hh"
 #include <EASTL/atomic.h>
+#include "libs/perf_diag.hh"
 
 namespace hal::tlb
 {
@@ -31,6 +32,9 @@ namespace
     eastl::atomic<uint64> g_requested_size[NCPU]{};
     eastl::atomic<uint32> g_requested_asid[NCPU]{};
     eastl::atomic<proc::ProcessMemoryManager *> g_requested_mm[NCPU]{};
+    // 每个 CPU 只访问自己的槽位。非空表示该 mm 的 active 位已经登记且
+    // 进入时的遗漏代际已补齐；地址空间切出/exec 时由 leave_mm 清空。
+    proc::ProcessMemoryManager *g_current_mm[NCPU]{};
     SpinLock g_mm_flush_lock;
     // 0=未初始化，1=某个 CPU 正在初始化，2=锁已可用。不能在调用
     // SpinLock::init() 之前就发布“已初始化”，否则第二个 CPU 可能直接使用
@@ -95,9 +99,11 @@ namespace
 
     void flush_local_range_asid(uint32 asid, uint64 start, uint64 size)
     {
+        F7LY_PERF_ADD(TlbFlush, 1);
         asm volatile("dbar 0" ::: "memory");
         if (size == 0)
         {
+            F7LY_PERF_ADD(TlbFullFlush, 1);
             // 0x3 是当前 ASID 的全量失效；普通映射更新优先使用下面的
             // 0x6 按 VA+ASID 失效，避免影响同一 CPU 上其它地址空间。
             asm volatile("invtlb 0x3, $zero, $zero" ::: "memory");
@@ -116,6 +122,39 @@ namespace
                          : "memory");
         }
         asm volatile("dbar 0" ::: "memory");
+    }
+
+    // 把需要多个锁/代际变量的冷路径单独保留，避免稳定 usertrapret 命中
+    // per-CPU mm 指针时仍保存整套慢路径寄存器。
+    __attribute__((noinline)) void enter_mm_slow(proc::ProcessMemoryManager &mm,
+                                                 uint64 cpu_id)
+    {
+        const uint64 cpu_bit = 1ULL << cpu_id;
+        for (;;)
+        {
+            mm.tlb_state_lock.acquire();
+            mm.tlb_active_cpu_mask |= cpu_bit;
+            const uint64 generation = mm.tlb_generation;
+            const uint64 seen = mm.tlb_seen_generation[cpu_id];
+            mm.tlb_state_lock.release();
+            if (seen >= generation)
+            {
+                return;
+            }
+            flush_local_range_asid(mm.user_asid, 0, 0);
+            mm.tlb_state_lock.acquire();
+            if (mm.tlb_seen_generation[cpu_id] < generation)
+            {
+                mm.tlb_seen_generation[cpu_id] = generation;
+            }
+            const bool caught_up =
+                mm.tlb_seen_generation[cpu_id] >= mm.tlb_generation;
+            mm.tlb_state_lock.release();
+            if (caught_up)
+            {
+                return;
+            }
+        }
     }
 }
 
@@ -142,6 +181,7 @@ void initialize_current_cpu()
     g_requested_size[cpu_id].store(0, eastl::memory_order_release);
     g_requested_asid[cpu_id].store(0, eastl::memory_order_release);
     g_requested_mm[cpu_id].store(nullptr, eastl::memory_order_release);
+    g_current_mm[cpu_id] = nullptr;
     flush_local_range(0, 0);
     g_acknowledged_generation[cpu_id].store(generation, eastl::memory_order_release);
 }
@@ -150,6 +190,8 @@ void flush_local_range(uint64 start, uint64 size)
 {
     (void)start;
     (void)size;
+    F7LY_PERF_ADD(TlbFlush, 1);
+    F7LY_PERF_ADD(TlbFullFlush, 1);
     // 跨核页表更新和 PCB/ASID 槽位回收仍以正确性优先，保守清空本 CPU
     // 全 TLB，避免相邻双页项以及任意用户 ASID 的历史翻译遗漏。
     asm volatile("dbar 0" ::: "memory");
@@ -222,6 +264,7 @@ void flush_range_all_cpus(uint64 start, uint64 size)
     {
         remote_mask &= ~(1ULL << current_cpu);
     }
+    F7LY_PERF_ADD(TlbRemoteCpu, perfdiag::count_set_bits(remote_mask));
 
     // PTE 写入先于 request 的 release；目标 CPU 在 acquire 后失效并回写 ack。
     for (uint64 cpu_id = 0; cpu_id < NCPU; ++cpu_id)
@@ -283,34 +326,18 @@ void flush_range_all_cpus(uint64 start, uint64 size)
 void enter_mm(proc::ProcessMemoryManager &mm)
 {
     const uint64 cpu_id = Cpu::current_cpu_id();
-    if (!Cpu::is_valid_cpu_id(cpu_id))
+    if (cpu_id >= NCPU)
     {
         return;
     }
-    for (;;)
+    if (g_current_mm[cpu_id] == &mm)
     {
-        mm.tlb_state_lock.acquire();
-        mm.tlb_active_cpu_mask |= 1ULL << cpu_id;
-        const uint64 generation = mm.tlb_generation;
-        const uint64 seen = mm.tlb_seen_generation[cpu_id];
-        mm.tlb_state_lock.release();
-        if (seen >= generation)
-        {
-            return;
-        }
-        flush_local_range_asid(mm.user_asid, 0, 0);
-        mm.tlb_state_lock.acquire();
-        if (mm.tlb_seen_generation[cpu_id] < generation)
-        {
-            mm.tlb_seen_generation[cpu_id] = generation;
-        }
-        const bool caught_up = mm.tlb_seen_generation[cpu_id] >= mm.tlb_generation;
-        mm.tlb_state_lock.release();
-        if (caught_up)
-        {
-            return;
-        }
+        // active 地址空间的 PTE 更新会等待本 CPU 完成定向 IPI 失效；重复
+        // usertrapret 因而无需再次获取 tlb_state_lock 或补做全 ASID invtlb。
+        return;
     }
+    enter_mm_slow(mm, cpu_id);
+    g_current_mm[cpu_id] = &mm;
 }
 
 void leave_mm(proc::ProcessMemoryManager &mm)
@@ -320,9 +347,14 @@ void leave_mm(proc::ProcessMemoryManager &mm)
     {
         return;
     }
+    if (g_current_mm[cpu_id] == &mm)
+    {
+        g_current_mm[cpu_id] = nullptr;
+    }
     mm.tlb_state_lock.acquire();
     mm.tlb_active_cpu_mask &= ~(1ULL << cpu_id);
     mm.tlb_state_lock.release();
+
 }
 
 void flush_mm_range(proc::ProcessMemoryManager &mm, uint64 start, uint64 size)
@@ -343,6 +375,8 @@ void flush_mm_range(proc::ProcessMemoryManager &mm, uint64 start, uint64 size)
         remote_mask &= ~(1ULL << current_cpu);
     }
     mm.tlb_state_lock.release();
+
+    F7LY_PERF_ADD(TlbRemoteCpu, perfdiag::count_set_bits(remote_mask));
 
     flush_local_range_asid(mm.user_asid, start, size);
     if (Cpu::is_valid_cpu_id(current_cpu))

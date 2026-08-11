@@ -91,8 +91,10 @@ namespace shm
                 return {};
             }
 
-            fs::Kstat st{};
-            if (fs::k_vfs.fstat(file_obj, &st) != EOK || st.ino == 0)
+            fs::FilePageCacheIdentity file_identity{};
+            if (!file_obj->get_file_page_cache_identity(file_identity) ||
+                file_identity.mount_identity == 0 ||
+                file_identity.inode == 0)
             {
                 return {};
             }
@@ -100,13 +102,11 @@ namespace shm
             char identity[96];
             snprintf(identity,
                      sizeof(identity),
-                     "file:dev=%p:ino=%p:path=",
-                     reinterpret_cast<void *>(static_cast<uint64>(st.dev)),
-                     reinterpret_cast<void *>(st.ino));
-
-            eastl::string key(identity);
-            key += file_obj->backing_path();
-            return key;
+                     "file:mount=%p:ino=%u:generation=%u",
+                     reinterpret_cast<void *>(file_identity.mount_identity),
+                     file_identity.inode,
+                     file_identity.inode_generation);
+            return eastl::string(identity);
         }
 
         inline uint64 current_ipc_namespace_id()
@@ -533,7 +533,9 @@ namespace shm
         return 0;
     }
 
-    proc::FileVmObject *ShmManager::acquire_shared_file_object(fs::file *file_obj)
+    proc::FileVmObject *ShmManager::acquire_shared_file_object(fs::file *file_obj,
+                                                               uint64 initial_file_size,
+                                                               uint64 initial_file_size_epoch)
     {
         if (file_obj == nullptr)
         {
@@ -545,7 +547,12 @@ namespace shm
         {
             // 没有稳定 inode 身份的文件对象（例如部分匿名后端/临时句柄）
             // 不能硬塞进路径缓存，否则 unlink/recreate 或伪文件会被错误共享。
-            return new proc::FileVmObject(file_obj, true, false, {});
+            return new proc::FileVmObject(file_obj,
+                                          true,
+                                          false,
+                                          {},
+                                          initial_file_size,
+                                          initial_file_size_epoch);
         }
 
         {
@@ -560,7 +567,13 @@ namespace shm
 
         // FileVmObject 构造会登记到全局对象表，登记过程也需要 shm_lock_。
         // 因此对象构造必须放在缓存锁外，避免 MAP_SHARED 文件映射触发锁重入 panic。
-        proc::FileVmObject *object = new proc::FileVmObject(file_obj, true, false, cache_key);
+        proc::FileVmObject *object =
+            new proc::FileVmObject(file_obj,
+                                   true,
+                                   false,
+                                   cache_key,
+                                   initial_file_size,
+                                   initial_file_size_epoch);
         if (object == nullptr)
         {
             return nullptr;
@@ -1489,8 +1502,11 @@ namespace shm
         }
         size_t total_free = shm_size > total_used ? (shm_size - total_used) : 0;
         printfYellow("  Total free memory: 0x%x bytes\n", total_free);
-        printfYellow("  Memory utilization: %.1f%%\n",
-                     shm_size == 0 ? 0.0 : (double)total_used * 100.0 / shm_size);
+        const uint64 utilization_tenths =
+            shm_size == 0 ? 0 : (static_cast<uint64>(total_used) * 1000u) / shm_size;
+        printfYellow("  Memory utilization: %u.%u%%\n",
+                     static_cast<uint>(utilization_tenths / 10u),
+                     static_cast<uint>(utilization_tenths % 10u));
     }
 
     size_t ShmManager::get_total_free_memory() const

@@ -12,6 +12,7 @@
 namespace fs
 {
     class file;
+    struct FilePageCacheIdentity;
 }
 
 namespace proc
@@ -65,6 +66,8 @@ namespace proc
         void release_source_pages();
 
         mutable SpinLock object_lock_;
+        // 表中每页持有一份 PMM owner 引用；安装 PTE 时另行 retain。
+        // 只有对象最后一个 VMA 引用释放后，析构才会清空该表。
         eastl::unordered_map<uint64, uint64> source_pages_;
 
     private:
@@ -89,12 +92,20 @@ namespace proc
     class FileVmObject final : public VmObject
     {
     public:
-        FileVmObject(fs::file *file, bool shared_mapping, bool zero_fill_past_file, const eastl::string &cache_key = {});
+        FileVmObject(fs::file *file,
+                     bool shared_mapping,
+                     bool zero_fill_past_file,
+                     const eastl::string &cache_key = {},
+                     uint64 initial_file_size = ~static_cast<uint64>(0),
+                     uint64 initial_file_size_epoch = 0);
         ~FileVmObject() override;
 
         int prepare_page(VmArea &area, uint64 page_index, int access_type, VmPageView &view) override;
         int sync_area_range(const VmArea &area, uint64 start, uint64 end) override;
         fs::file *backing_file() const override { return file_; }
+        bool matches_cache_identity(const fs::FilePageCacheIdentity &identity) const;
+        /** object/source owner 退役；PTE 和 cache owner 由各自路径独立归还。 */
+        void retire_source_pages_from(uint64 first_file_page);
         const eastl::string &cache_key() const { return cache_key_; }
         const eastl::string *shared_cache_key() const override
         {
@@ -102,9 +113,31 @@ namespace proc
         }
 
     private:
+        int prepare_page_for_sequence(VmArea &area,
+                                      uint64 page_index,
+                                      int access_type,
+                                      uint64 expected_sequence,
+                                      VmPageView &view);
         fs::file *file_;
         bool zero_fill_past_file_;
         eastl::string cache_key_;
+        // 全局 clean page cache 的稳定 inode incarnation；不支持该身份的
+        // 虚拟/设备文件保持 cache_identity_valid_ == false，继续走对象私有页。
+        uint64 cache_mount_identity_ = 0;
+        uint32 cache_inode_ = 0;
+        uint32 cache_inode_generation_ = 0;
+        bool cache_identity_valid_ = false;
+        bool cached_file_size_valid_ = false;
+        uint64 cached_file_size_ = 0;
+        uint64 cached_file_size_epoch_ = 0;
+        // source_pages_ 当前条目的内容 epoch。失效时旧 owner 先移入 retired，
+        // 保证另一个正在完成 fault/COW 的 CPU 不会观察到已释放物理页。
+        eastl::unordered_map<uint64, uint64> source_page_epochs_;
+        eastl::vector<uint64> retired_source_pages_;
+        uint64 sequential_last_page_ = ~static_cast<uint64>(0);
+        uint16 sequential_miss_window_ = 0;
+        uint8 sequential_window_count_ = 0;
+        uint64 readahead_until_page_ = 0;
     };
 
     struct SysvShmMetadata

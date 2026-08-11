@@ -4,11 +4,16 @@
 #include "hal/riscv/sbi.hh"
 #include "mem/memlayout.hh"
 #include "proc/process_memory_manager.hh"
+#include "libs/perf_diag.hh"
 
 namespace hal::tlb
 {
 namespace
 {
+    // 仅由对应 hart 读写自己的槽位。指针非空表示该 mm 的 active 位已经
+    // 发布且遗漏代际已经补齐；scheduler/exec 切出地址空间时由 leave_mm 清空。
+    proc::ProcessMemoryManager *g_current_mm[NUMCPU]{};
+
     bool normalize_range(uint64 start, uint64 size,
                          uint64 &normalized_start, uint64 &normalized_size)
     {
@@ -47,20 +52,61 @@ namespace
         }
     }
 
+    // 与每次 trap 返回的同-mm 指针比较分离，避免慢路径需要的寄存器保存
+    // 污染已命中时的函数序言/尾声。
+    __attribute__((noinline)) void enter_mm_slow(proc::ProcessMemoryManager &mm,
+                                                 uint64 cpu_id)
+    {
+        const uint64 cpu_bit = 1ULL << cpu_id;
+        for (;;)
+        {
+            mm.tlb_state_lock.acquire();
+            mm.tlb_active_cpu_mask |= cpu_bit;
+            const uint64 generation = mm.tlb_generation;
+            const uint64 seen = mm.tlb_seen_generation[cpu_id];
+            mm.tlb_state_lock.release();
+            if (seen >= generation)
+            {
+                return;
+            }
+
+            flush_local_asid(mm.user_asid, 0, 0);
+            mm.tlb_state_lock.acquire();
+            if (mm.tlb_seen_generation[cpu_id] < generation)
+            {
+                mm.tlb_seen_generation[cpu_id] = generation;
+            }
+            const bool caught_up =
+                mm.tlb_seen_generation[cpu_id] >= mm.tlb_generation;
+            mm.tlb_state_lock.release();
+            if (caught_up)
+            {
+                return;
+            }
+        }
+    }
+
 }
 
 void initialize_current_cpu()
 {
+    const uint64 cpu_id = Cpu::current_cpu_id();
+    if (Cpu::is_valid_cpu_id(cpu_id))
+    {
+        g_current_mm[cpu_id] = nullptr;
+    }
     flush_local_range(0, 0);
 }
 
 void flush_local_range(uint64 start, uint64 size)
 {
+    F7LY_PERF_ADD(TlbFlush, 1);
     uint64 normalized_start = 0;
     uint64 normalized_size = 0;
     if (!normalize_range(start, size, normalized_start, normalized_size) ||
         normalized_size > PGSIZE * 64)
     {
+        F7LY_PERF_ADD(TlbFullFlush, 1);
         asm volatile("sfence.vma zero, zero" ::: "memory");
         return;
     }
@@ -89,6 +135,7 @@ void flush_range_all_cpus(uint64 start, uint64 size)
     {
         return;
     }
+    F7LY_PERF_ADD(TlbRemoteCpu, perfdiag::count_set_bits(remote_mask));
 
     uint64 remote_start = 0;
     uint64 remote_size = 0;
@@ -107,36 +154,18 @@ void flush_all_cpus()
 void enter_mm(proc::ProcessMemoryManager &mm)
 {
     const uint64 cpu_id = Cpu::current_cpu_id();
-    if (!Cpu::is_valid_cpu_id(cpu_id))
+    if (cpu_id >= NUMCPU)
     {
         return;
     }
-
-    for (;;)
+    if (g_current_mm[cpu_id] == &mm)
     {
-        mm.tlb_state_lock.acquire();
-        mm.tlb_active_cpu_mask |= 1ULL << cpu_id;
-        const uint64 generation = mm.tlb_generation;
-        const uint64 seen = mm.tlb_seen_generation[cpu_id];
-        mm.tlb_state_lock.release();
-        if (seen >= generation)
-        {
-            return;
-        }
-
-        flush_local_asid(mm.user_asid, 0, 0);
-        mm.tlb_state_lock.acquire();
-        if (mm.tlb_seen_generation[cpu_id] < generation)
-        {
-            mm.tlb_seen_generation[cpu_id] = generation;
-        }
-        const bool caught_up = mm.tlb_seen_generation[cpu_id] >= mm.tlb_generation;
-        mm.tlb_state_lock.release();
-        if (caught_up)
-        {
-            return;
-        }
+        // 地址空间保持 active 时，所有 PTE 更新都会同步 shootdown 本 CPU；
+        // 因此重复的 trap 返回无需再次争用 mm.tlb_state_lock。
+        return;
     }
+    enter_mm_slow(mm, cpu_id);
+    g_current_mm[cpu_id] = &mm;
 }
 
 void leave_mm(proc::ProcessMemoryManager &mm)
@@ -145,6 +174,10 @@ void leave_mm(proc::ProcessMemoryManager &mm)
     if (!Cpu::is_valid_cpu_id(cpu_id))
     {
         return;
+    }
+    if (g_current_mm[cpu_id] == &mm)
+    {
+        g_current_mm[cpu_id] = nullptr;
     }
     mm.tlb_state_lock.acquire();
     mm.tlb_active_cpu_mask &= ~(1ULL << cpu_id);
@@ -180,6 +213,7 @@ void flush_mm_range(proc::ProcessMemoryManager &mm, uint64 start, uint64 size)
     }
     if (remote_mask != 0)
     {
+        F7LY_PERF_ADD(TlbRemoteCpu, perfdiag::count_set_bits(remote_mask));
         uint64 remote_start = 0;
         uint64 remote_size = 0;
         normalize_range(start, size, remote_start, remote_size);

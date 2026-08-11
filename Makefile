@@ -26,6 +26,7 @@ endif
 ARCH ?= riscv
 INITCODE_MODE ?= evaluation
 DIS_PRINTF ?= 0
+PERF_DIAG ?= 0
 QEMU_MEM ?= 8G
 QEMU_DEBUG_MEM ?= 8G
 # 2026 决赛 BuildStorm 明确要求使用 8 vCPU 和 8 GiB 内存。
@@ -57,14 +58,30 @@ r riscv l loongarch:
 
 ifeq ($(ARCH),riscv)
   CROSS_COMPILE := riscv64-linux-gnu-
-  ARCH_CFLAGS := -DRISCV -mcmodel=medany
+  KERNEL_ABI_FLAGS := -march=rv64imac -mabi=lp64
+  # Debian/Ubuntu 的 RISC-V cross sysroot 只安装 lp64d glibc 头；内核不链接
+  # glibc，这里只让其头文件选择现有的 stubs-lp64d.h，代码生成仍保持 lp64/imac。
+  KERNEL_SYSROOT_HEADER_FLAGS := -U__riscv_float_abi_soft -D__riscv_float_abi_double
+  KERNEL_ARCH_CFLAGS := -DRISCV -mcmodel=medany $(KERNEL_ABI_FLAGS) $(KERNEL_SYSROOT_HEADER_FLAGS)
+  INITCODE_ABI_FLAGS := -march=rv64imafdc -mabi=lp64d
+  INITCODE_ARCH_CFLAGS := -DRISCV -mcmodel=medany $(INITCODE_ABI_FLAGS)
+  # trampoline 显式保存/恢复用户 F/D 现场，但自身仍使用 soft-float 调用 ABI。
+  CONTEXT_ASM_CFLAGS := -march=rv64imafdc -mabi=lp64
   OUTPUT_PREFIX := riscv
   QEMU_EVAL_IMAGE := $(RISCV_EVAL_IMAGE)
   QEMU_SHELL_IMAGE := $(RISCV_SHELL_IMAGE)
   QEMU_BLOCK_DEVICE_ARGS := -device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0
 else ifeq ($(ARCH),loongarch)
   CROSS_COMPILE := loongarch64-linux-gnu-
-  ARCH_CFLAGS := -DLOONGARCH -march=loongarch64 -mabi=lp64d -mcmodel=normal -Wno-error=use-after-free
+  KERNEL_ABI_FLAGS := -march=loongarch64 -mabi=lp64s -mfpu=none
+  # 当前 LoongArch cross sysroot 同样只提供 lp64d glibc 头；仅修正头文件
+  # selector，内核代码生成及链接 ABI 仍为 lp64s/nofpu。
+  KERNEL_SYSROOT_HEADER_FLAGS := -U__loongarch_soft_float -D__loongarch_double_float
+  KERNEL_ARCH_CFLAGS := -DLOONGARCH $(KERNEL_ABI_FLAGS) $(KERNEL_SYSROOT_HEADER_FLAGS) -mcmodel=normal -Wno-error=use-after-free
+  INITCODE_ABI_FLAGS := -march=loongarch64 -mabi=lp64d -mfpu=64
+  INITCODE_ARCH_CFLAGS := -DLOONGARCH $(INITCODE_ABI_FLAGS) -mcmodel=normal -Wno-error=use-after-free
+  # uservec 显式操作 FPU/LSX 现场；-mabi=lp64s 保证它不向链接图引入硬浮点调用 ABI。
+  CONTEXT_ASM_CFLAGS := -march=loongarch64 -mabi=lp64s -mfpu=64
   OUTPUT_PREFIX := loongarch
   QEMU_EVAL_IMAGE := $(LOONGARCH_EVAL_IMAGE)
   QEMU_SHELL_IMAGE := $(LOONGARCH_SHELL_IMAGE)
@@ -92,7 +109,15 @@ QEMU_STORAGE_ARGS := -drive file=$(QEMU_STORAGE_IMAGE),if=none,format=raw,id=x0 
                      $(QEMU_BLOCK_DEVICE_ARGS)
 
 ifeq ($(DIS_PRINTF),1)
-  ARCH_CFLAGS += -DDIS_PRINTF
+  BUILD_CPPFLAGS += -DDIS_PRINTF
+endif
+
+# 性能诊断默认完全关闭；只有定向 A/B 内核显式 PERF_DIAG=1 时才编译计数热路径。
+ifeq ($(PERF_DIAG),1)
+  BUILD_CPPFLAGS += -DF7LY_PERF_DIAG=1
+  # 诊断与正式对象分开，避免 make 在 CFLAGS 变化时误用旧 .o。
+  OUTPUT_PREFIX := $(OUTPUT_PREFIX)-perf
+  KERNEL_NAME_SUFFIX := $(KERNEL_NAME_SUFFIX)-perf
 endif
 
 # ===== 工具链配置 =====
@@ -114,20 +139,22 @@ SUBDIRS := $(ARCH_DIRS) $(COMMON_DIRS)
 
 LINK_SCRIPT := $(KERNEL_DIR)/link/$(ARCH)/kernel.ld
 
-CFLAGS := -Wall -Werror -ffreestanding -O2 -fno-builtin -g -fno-stack-protector $(ARCH_CFLAGS)
+KERNEL_CFLAGS := -Wall -Werror -ffreestanding -O2 -fno-builtin -g -fno-stack-protector \
+				 $(KERNEL_ARCH_CFLAGS) $(BUILD_CPPFLAGS)
 ifeq ($(ARCH),riscv)
   EA_PLATFORM := -DEA_PROCESSOR_RISCV
 else ifeq ($(ARCH),loongarch)
   EA_PLATFORM := -DEA_PROCESSOR_LOONGARCH64
 endif
-CXXFLAGS := $(CFLAGS) -std=c++23 -nostdlib \
+KERNEL_CXXFLAGS := $(KERNEL_CFLAGS) -std=c++23 -nostdlib \
 			-DEA_PLATFORM_LINUX -DEA_PLATFORM_POSIX \
             $(EA_PLATFORM) -DEA_ENDIAN_LITTLE=1 \
             -Wno-deprecated-declarations -Wno-strict-aliasing \
             -fno-exceptions -fno-rtti -Wno-maybe-uninitialized \
 			-Wno-volatile -Wno-tautological-compare -Wno-unused-but-set-variable
 
-LDFLAGS := -static -nostdlib -nostartfiles -nodefaultlibs -Wl,-z,max-page-size=4096 -Wl,-T,$(LINK_SCRIPT) -Wl,--gc-sections
+KERNEL_LDFLAGS := $(KERNEL_ABI_FLAGS) -static -nostdlib -nostartfiles -nodefaultlibs \
+				  -Wl,-z,max-page-size=4096 -Wl,-T,$(LINK_SCRIPT) -Wl,--gc-sections
 # 包含头文件路径：架构特定目录 + 通用目录 + 有架构子目录的文件夹根目录
 INCLUDES := -I$(KERNEL_DIR) $(foreach dir,$(SUBDIRS),-I$(KERNEL_DIR)/$(dir))
 INCLUDES += -I$(KERNEL_DIR)/mem -I$(KERNEL_DIR)/devs -I$(KERNEL_DIR)/trap -I$(KERNEL_DIR)/hal -I$(KERNEL_DIR)/proc -I$(KERNEL_DIR)/boot
@@ -182,6 +209,8 @@ OBJS += $(patsubst $(KERNEL_DIR)/%.s,   $(BUILD_DIR)/%.o, $(filter %.s,   $(SRCS
 ENTRY_OBJ := $(BUILD_DIR)/boot/$(ARCH)/entry.o
 OBJS_NO_ENTRY := $(filter-out $(ENTRY_OBJ), $(OBJS))
 DEPS := $(OBJS:.o=.d)
+EASTL_BUILD_INPUTS := $(shell find $(EASTL_DIR)/source $(EASTL_DIR)/include \
+		-type f \( -name "*.cpp" -o -name "*.h" -o -name "*.inl" \))
 
 # ===== 输出目标 =====
 ifeq ($(ARCH),riscv)
@@ -191,6 +220,7 @@ else ifeq ($(ARCH),loongarch)
   KERNEL_ELF := kernel-la$(KERNEL_NAME_SUFFIX)
   KERNEL_BIN := kernel-la$(KERNEL_NAME_SUFFIX).bin
 endif
+KERNEL_FP_GATE_STAMP := $(BUILD_DIR)/.kernel-no-fp
 
 # ===== initcode 用户进程编译相关 =====
 # 支持 riscv 和 loongarch 架构，自动选择交叉工具链和参数
@@ -242,14 +272,65 @@ endif
 
 # 编译参数
 
-INITCODE_CFLAGS := -Wall -O -fno-builtin -fno-exceptions -fno-rtti -fno-stack-protector -nostdlib -ffreestanding $(ARCH_CFLAGS) -Iuser/deps -Iuser/syscall_lib -Iuser/syscall_lib/arch/$(ARCH) -Ikernel/sys -Ikernel
-CFLAGS += -DINITCODE_BIN_PATH=\"$(INITCODE_INCBIN)\"
-ifeq ($(ARCH),riscv)
-INITCODE_LDFLAGS := -static -nostdlib -e main -nodefaultlibs -static -Wl,--no-dynamic-linker,-T,$(INITCODE_LINK_SCRIPT)
-else ifeq ($(ARCH),loongarch)
-INITCODE_LDFLAGS := -static -nostdlib -e main -nodefaultlibs -static -Wl,--no-dynamic-linker,-T,$(INITCODE_LINK_SCRIPT)
-endif
-.PHONY: all clean dirs build riscv loongarch run shell debug initcode build-la
+INITCODE_CFLAGS := -Wall -O -fno-builtin -fno-exceptions -fno-rtti -fno-stack-protector \
+				   -nostdlib -ffreestanding $(INITCODE_ARCH_CFLAGS) $(BUILD_CPPFLAGS) \
+				   -Iuser/deps -Iuser/syscall_lib -Iuser/syscall_lib/arch/$(ARCH) -Ikernel/sys -Ikernel
+KERNEL_CFLAGS += -DINITCODE_BIN_PATH=\"$(INITCODE_INCBIN)\"
+KERNEL_CXXFLAGS += -DINITCODE_BIN_PATH=\"$(INITCODE_INCBIN)\"
+INITCODE_LDFLAGS := $(INITCODE_ABI_FLAGS) -static -nostdlib -e main -nodefaultlibs \
+					-static -Wl,--no-dynamic-linker,-T,$(INITCODE_LINK_SCRIPT)
+
+# 配置 stamp 记录所有会改变目标 ABI/代码生成的变量。每次 make 都重算内容，
+# 只有内容真正变化才更新时间戳，因此切换工具链、ABI 或诊断开关不会复用旧对象。
+KERNEL_CONFIG_STAMP := $(BUILD_DIR)/.kernel-build-config
+INITCODE_CONFIG_STAMP := $(BUILD_DIR)/.initcode-build-config
+KERNEL_BUILD_RULES_ID := $(shell cksum Makefile thirdparty/EASTL/Makefile | cksum | awk '{print $$1 ":" $$2}')
+INITCODE_BUILD_RULES_ID := $(shell cksum Makefile | awk '{print $$1 ":" $$2}')
+
+.PHONY: FORCE
+FORCE:
+
+$(KERNEL_CONFIG_STAMP): FORCE Makefile thirdparty/EASTL/Makefile
+	@mkdir -p $(dir $@)
+	@tmp="$@.tmp.$$$$"; \
+	printf '%s\n' \
+		"ARCH=$(ARCH)" \
+		"CC=$(CC)" \
+		"CXX=$(CXX)" \
+		"LD=$(LD)" \
+		"BUILD_RULES=$(KERNEL_BUILD_RULES_ID)" \
+		"KERNEL_CFLAGS=$(KERNEL_CFLAGS)" \
+		"KERNEL_CXXFLAGS=$(KERNEL_CXXFLAGS)" \
+		"KERNEL_LDFLAGS=$(KERNEL_LDFLAGS)" \
+		"CONTEXT_ASM_CFLAGS=$(CONTEXT_ASM_CFLAGS)" > "$$tmp"; \
+	if [ -r "$@" ] && cmp -s "$@" "$$tmp"; then \
+		rm -f "$$tmp"; \
+	else \
+		mv -f "$$tmp" "$@"; \
+	fi
+
+$(INITCODE_CONFIG_STAMP): FORCE Makefile
+	@mkdir -p $(dir $@)
+	@tmp="$@.tmp.$$$$"; \
+	printf '%s\n' \
+		"ARCH=$(ARCH)" \
+		"CXX=$(CXX)" \
+		"LD=$(LD)" \
+		"BUILD_RULES=$(INITCODE_BUILD_RULES_ID)" \
+		"INITCODE_MODE=$(INITCODE_MODE)" \
+		"INITCODE_SRC=$(INITCODE_SRC)" \
+		"INITCODE_CFLAGS=$(INITCODE_CFLAGS)" \
+		"INITCODE_LDFLAGS=$(INITCODE_LDFLAGS)" > "$$tmp"; \
+	if [ -r "$@" ] && cmp -s "$@" "$$tmp"; then \
+		rm -f "$$tmp"; \
+	else \
+		mv -f "$$tmp" "$@"; \
+	fi
+
+$(OBJS): $(KERNEL_CONFIG_STAMP)
+$(INITCODE_OBJ) $(SYSCALL_OBJ) $(PRINTF_OBJ) $(FUCKYOU_OBJ) $(USER_TEST_OBJ): $(INITCODE_CONFIG_STAMP)
+
+.PHONY: all clean dirs build riscv loongarch run shell debug initcode build-la check-kernel-no-fp
 
 
 all: 
@@ -276,39 +357,49 @@ dirs:
 
 $(BUILD_DIR)/%.o: $(KERNEL_DIR)/%.c
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
+	$(CC) $(KERNEL_CFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
 
 # GCC 在这个编译单元里会对 EASTL string 的 vendor 模板触发 uninitialized 误报，
 # 这里只对 proc_manager.cc 做局部豁免，保留其余文件的 -Werror 约束。
-$(BUILD_DIR)/proc/proc_manager.o: CXXFLAGS += -Wno-error=uninitialized -Wno-uninitialized
+$(BUILD_DIR)/proc/proc_manager.o: private KERNEL_CXXFLAGS += -Wno-error=uninitialized -Wno-uninitialized
 
 # syscall_handler.cc 里同样会被 EASTL string 的 vendor 模板误报击中，
 # 继续做文件级豁免，避免把第三方模板假阳性扩散成全局降级。
-$(BUILD_DIR)/sys/syscall_handler.o: CXXFLAGS += -Wno-error=uninitialized -Wno-uninitialized
+$(BUILD_DIR)/sys/syscall_handler.o: private KERNEL_CXXFLAGS += -Wno-error=uninitialized -Wno-uninitialized
 
 # vfs_utils.cc 的路径规范化和挂载命名空间逻辑会组合 EASTL string/vector，
 # GCC 会在 EASTL vendor 模板内触发同类 uninitialized 误报，按编译单元局部豁免。
-$(BUILD_DIR)/fs/vfs/vfs_utils.o: CXXFLAGS += -Wno-error=uninitialized -Wno-uninitialized
+$(BUILD_DIR)/fs/vfs/vfs_utils.o: private KERNEL_CXXFLAGS += -Wno-error=uninitialized -Wno-uninitialized
+
+ifeq ($(ARCH),riscv)
+$(BUILD_DIR)/mem/riscv/trampoline.o: $(KERNEL_DIR)/mem/riscv/trampoline.S $(KERNEL_CONFIG_STAMP)
+	@mkdir -p $(dir $@)
+	$(CC) $(filter-out -march=% -mabi=%,$(KERNEL_CFLAGS)) $(CONTEXT_ASM_CFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
+else ifeq ($(ARCH),loongarch)
+$(BUILD_DIR)/trap/loongarch/uservec.o: $(KERNEL_DIR)/trap/loongarch/uservec.S $(KERNEL_CONFIG_STAMP)
+	@mkdir -p $(dir $@)
+	$(CC) $(filter-out -march=% -mabi=% -mfpu=%,$(KERNEL_CFLAGS)) $(CONTEXT_ASM_CFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
+endif
 
 $(BUILD_DIR)/%.o: $(KERNEL_DIR)/%.cc
 	@mkdir -p $(dir $@)
-	$(CXX) $(CXXFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
+	$(CXX) $(KERNEL_CXXFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
 
 $(BUILD_DIR)/%.o: $(KERNEL_DIR)/%.cpp
 	@mkdir -p $(dir $@)
-	$(CXX) $(CXXFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
+	$(CXX) $(KERNEL_CXXFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
 
 $(BUILD_DIR)/%.o: $(KERNEL_DIR)/%.S
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
+	$(CC) $(KERNEL_CFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
 
 $(BUILD_DIR)/%.o: $(KERNEL_DIR)/%.s
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
+	$(CC) $(KERNEL_CFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
 
 $(KERNEL_ELF): $(ENTRY_OBJ) $(OBJS_NO_ENTRY) $(BUILD_DIR)/$(EASTL_DIR)/libeastl.a $(LINK_SCRIPT)
 	@mkdir -p $(dir $@)
-	$(LD) $(LDFLAGS) -o $@ $(ENTRY_OBJ) $(OBJS_NO_ENTRY) $(BUILD_DIR)/$(EASTL_DIR)/libeastl.a
+	$(LD) $(KERNEL_LDFLAGS) -o $@ $(ENTRY_OBJ) $(OBJS_NO_ENTRY) $(BUILD_DIR)/$(EASTL_DIR)/libeastl.a
 	$(SIZE) $@
 # 	$(OBJDUMP) -D $@ > kernel.asm
 # 	riscv64-linux-gnu-objdump -D kernel-rv > kernel.asm
@@ -318,12 +409,24 @@ $(KERNEL_ELF): $(ENTRY_OBJ) $(OBJS_NO_ENTRY) $(BUILD_DIR)/$(EASTL_DIR)/libeastl.
 $(KERNEL_ELF): $(INITCODE_BIN)
 
 
-$(KERNEL_BIN): $(KERNEL_ELF) 
+$(KERNEL_FP_GATE_STAMP): $(KERNEL_ELF) $(OBJS) $(BUILD_DIR)/$(EASTL_DIR)/libeastl.a scripts/check_kernel_no_fp.sh
+	@scripts/check_kernel_no_fp.sh $(ARCH) $(CROSS_COMPILE) $(KERNEL_ELF) \
+		$(OBJS) $(BUILD_DIR)/$(EASTL_DIR)/libeastl.a
+	@touch $@
+
+check-kernel-no-fp: $(KERNEL_FP_GATE_STAMP)
+
+
+$(KERNEL_BIN): $(KERNEL_ELF) $(KERNEL_FP_GATE_STAMP)
 	$(OBJCOPY) -R .note.gnu.build-id -R .comment -O binary $< $@
 
 export BUILDPATH := $(BUILD_DIR)
-$(BUILD_DIR)/$(EASTL_DIR)/libeastl.a:
-	@$(MAKE) -C $(EASTL_DIR) CROSS_COMPILE=$(CROSS_COMPILE) -j$(NPROC)
+$(BUILD_DIR)/$(EASTL_DIR)/libeastl.a: $(KERNEL_CONFIG_STAMP) $(EASTL_BUILD_INPUTS)
+	@$(MAKE) -C $(EASTL_DIR) \
+		CROSS_COMPILE=$(CROSS_COMPILE) \
+		KERNEL_CXXFLAGS='$(KERNEL_CXXFLAGS)' \
+		KERNEL_CONFIG_STAMP='$(KERNEL_CONFIG_STAMP)' \
+		-j$(NPROC)
 
 
 run:
