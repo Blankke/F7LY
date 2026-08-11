@@ -81,11 +81,11 @@ check_fsck() {
 
 run_arch() {
     local arch="$1"
-    local compiler make_arch kernel rootfs qemu binary temp_image timestamp log rc
+    local compiler make_profile kernel rootfs qemu binary temp_image timestamp log rc
     case "${arch}" in
         rv)
             compiler="riscv64-linux-gnu-gcc"
-            make_arch="riscv"
+            make_profile="riscv-qemu"
             kernel="${PROJECT_ROOT}/kernel-rv-shell"
             rootfs="${PROJECT_ROOT}/images/sdcard-rv.img"
             qemu="qemu-system-riscv64"
@@ -93,7 +93,7 @@ run_arch() {
             ;;
         la)
             compiler="loongarch64-linux-gnu-gcc"
-            make_arch="loongarch"
+            make_profile="loongarch-qemu"
             kernel="${PROJECT_ROOT}/kernel-la-shell"
             rootfs="${PROJECT_ROOT}/images/sdcard-la.img"
             qemu="qemu-system-loongarch64"
@@ -106,7 +106,7 @@ run_arch() {
     [[ -f "${rootfs}" ]] || die "缺少 shell 存储镜像：${rootfs}"
 
     echo "[EXT4] 构建 ${arch} shell 内核与静态专项"
-    make -C "${PROJECT_ROOT}" build "ARCH=${make_arch}" INITCODE_MODE=shell \
+    make -C "${PROJECT_ROOT}" build "PROFILE=${make_profile}" MODE=shell \
         >"${LOG_DIR}/build-${arch}-ext4-concurrency-$(date +%Y%m%d-%H%M%S).log" 2>&1
     "${compiler}" -std=c11 -O2 -Wall -Wextra -Werror -static -pthread \
         "${SOURCE}" -o "${binary}"

@@ -6,7 +6,7 @@
 #   scripts/run/smp_stress_ng.sh --seconds 3 --runs 1 --warmup-seconds 1
 #   scripts/run/smp_stress_ng.sh --qemu-cpus 8 --worker-list 1,2,4,8 --seconds 10 --runs 3
 #
-# 脚本只读使用 images/rootfs-riscv64.img，并通过 QEMU -snapshot 丢弃 guest 写入。
+# 脚本只读使用 RISC-V 决赛完整 rootfs，并通过 QEMU -snapshot 丢弃 guest 写入。
 # 每次执行保留完整串口日志、逐轮指标和汇总结果，不以“线程创建成功”替代吞吐验证。
 
 set -euo pipefail
@@ -21,7 +21,7 @@ runs=3
 warmup_seconds=2
 boot_wait_seconds=4
 qemu_mem="1G"
-rootfs="${PROJECT_ROOT}/images/rootfs-riscv64.img"
+rootfs="${PROJECT_ROOT}/images/oscomp-final-riscv64.img"
 skip_build=0
 guest_commands=""
 
@@ -148,11 +148,11 @@ done
 
 command -v qemu-system-riscv64 >/dev/null || die "缺少 qemu-system-riscv64"
 command -v rg >/dev/null || die "缺少 rg"
-[[ -f "${rootfs}" ]] || die "缺少 rootfs：${rootfs}"
+"${PROJECT_ROOT}/scripts/images/prepare-qemu-image.sh" riscv-shell "${rootfs}"
 
 if ((skip_build == 0)); then
     echo "[stress-ng] 构建 RISC-V shell 内核"
-    make -C "${PROJECT_ROOT}" build ARCH=riscv INITCODE_MODE=shell
+    make -C "${PROJECT_ROOT}" build PROFILE=riscv-qemu MODE=shell
 fi
 readonly kernel_image="${PROJECT_ROOT}/kernel-rv-shell"
 [[ -x "${kernel_image}" ]] || die "缺少 shell 内核：${kernel_image}"

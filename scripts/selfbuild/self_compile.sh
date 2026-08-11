@@ -157,7 +157,7 @@ done
 
 if ((SKIP_F7LY_BUILD == 0)); then
     info "构建 F7LY RISC-V shell 内核"
-    make -C "${PROJECT_ROOT}" build ARCH=riscv INITCODE_MODE=shell
+    make -C "${PROJECT_ROOT}" build PROFILE=riscv-qemu MODE=shell
 fi
 KERNEL="${PROJECT_ROOT}/kernel-rv-shell"
 [[ -x "${KERNEL}" ]] || die "缺少 F7LY shell 内核：${KERNEL}"

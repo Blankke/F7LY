@@ -9,8 +9,8 @@
 #   scripts/run/smp_cpu_bench.sh --arch all --worker-list 1,2 --seconds 10
 #
 # 脚本为 RISC-V 和 LoongArch 分别静态编译 tools/smp/f7ly_smp_cpu_bench.c，
-# RV 使用 make shell 的 rootfs-riscv64.img，LA 使用现有评测 sdcard；复制到 /tmp
-# 后注入该程序。每个 pthread worker 固定绑定一个 CPU，
+# 两个架构都使用 make shell 对应的决赛完整 rootfs，复制到 /tmp 后注入
+# 该程序。每个 pthread worker 固定绑定一个 CPU，
 # 负载期间反复采样 getcpu(2)，仅在“起止 CPU 与全部采样均为目标 CPU”时通过。
 # 其负载语义对齐 sysbench cpu 的重复素数计算；因为当前 rv64/la64 Alpine 包仓
 # 没有可直接安装的 sysbench 包，采用此可审计、无网络依赖的静态替代程序。
@@ -215,24 +215,26 @@ build_and_run_case() {
     local workers="$2"
     local qemu_cpu_count="$3"
     local run_index="$4"
-    local compiler kernel_arch kernel_image rootfs_image qemu_bin benchmark_binary
+    local compiler kernel_profile kernel_image rootfs_image image_kind qemu_bin benchmark_binary
     local timestamp temporary_rootfs log_file command_line timeout_seconds qemu_exit_code
     local metric_line metric_workers metric_events metric_elapsed metric_rate metric_status
 
     case "${arch}" in
         rv)
             compiler="riscv64-linux-gnu-gcc"
-            kernel_arch="riscv"
+            kernel_profile="riscv-qemu"
             kernel_image="${PROJECT_ROOT}/kernel-rv-shell"
-            rootfs_image="${PROJECT_ROOT}/images/sdcard-rv-pub.img"
+            rootfs_image="${PROJECT_ROOT}/images/oscomp-final-riscv64.img"
+            image_kind="riscv-shell"
             qemu_bin="qemu-system-riscv64"
             benchmark_binary="${BENCH_DIR}/f7ly_smp_cpu_bench-rv"
             ;;
         la)
             compiler="loongarch64-linux-gnu-gcc"
-            kernel_arch="loongarch"
+            kernel_profile="loongarch-qemu"
             kernel_image="${PROJECT_ROOT}/kernel-la-shell"
-            rootfs_image="${PROJECT_ROOT}/images/sdcard-la-pub.img"
+            rootfs_image="${PROJECT_ROOT}/images/oscomp-final-loongarch64.img"
+            image_kind="loongarch-shell"
             qemu_bin="qemu-system-loongarch64"
             benchmark_binary="${BENCH_DIR}/f7ly_smp_cpu_bench-la"
             ;;
@@ -243,12 +245,13 @@ build_and_run_case() {
 
     command -v "${compiler}" >/dev/null || die "缺少交叉编译器：${compiler}"
     command -v "${qemu_bin}" >/dev/null || die "缺少 QEMU：${qemu_bin}"
-    [[ -f "${rootfs_image}" ]] || die "缺少 rootfs：${rootfs_image}"
     [[ -f "${BENCH_SOURCE}" ]] || die "缺少压测源码：${BENCH_SOURCE}"
 
     if [[ -z "${prepared_images[${arch}]:-}" ]]; then
+        "${PROJECT_ROOT}/scripts/images/prepare-qemu-image.sh" \
+            "${image_kind}" "${rootfs_image}"
         echo "[SMP] 构建 ${arch} shell 内核和静态压测器"
-        if ! make -C "${PROJECT_ROOT}" build ARCH="${kernel_arch}" INITCODE_MODE=shell; then
+        if ! make -C "${PROJECT_ROOT}" build PROFILE="${kernel_profile}" MODE=shell; then
             return 1
         fi
         if ! "${compiler}" -std=c11 -O2 -Wall -Wextra -Werror -static -pthread \

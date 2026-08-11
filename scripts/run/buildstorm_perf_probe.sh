@@ -22,18 +22,18 @@ set -euo pipefail
 ARCH_NAME="${1:-riscv}"
 case "${ARCH_NAME}" in
     riscv)
-        MAKE_ARCH="riscv"
+        MAKE_PROFILE="riscv-qemu"
         MAKE_ALIAS="r"
-        SOURCE_IMAGE="images/sdcard-rv-pub.img"
+        IMAGE_KIND="riscv-evaluation"
+        SOURCE_IMAGE="images/oscomp-preliminary-riscv64.img"
         KERNEL_FILENAME="kernel-rv"
-        RUN_TARGET="run-riscv"
         ;;
     loongarch)
-        MAKE_ARCH="loongarch"
+        MAKE_PROFILE="loongarch-qemu"
         MAKE_ALIAS="l"
-        SOURCE_IMAGE="images/sdcard-la-pub.img"
+        IMAGE_KIND="loongarch-evaluation"
+        SOURCE_IMAGE="images/oscomp-preliminary-loongarch64.img"
         KERNEL_FILENAME="kernel-la"
-        RUN_TARGET="run-loongarch"
         ;;
     *)
         echo "用法: $0 {riscv|loongarch}" >&2
@@ -59,17 +59,16 @@ if pgrep -f 'qemu-system-(riscv64|loongarch64)' >/dev/null 2>&1; then
     exit 3
 fi
 
-if [[ ! -f "${SOURCE_IMAGE}" ]]; then
-    echo "缺少评测镜像: ${SOURCE_IMAGE}" >&2
-    exit 1
-fi
+# 与 make run 共用同一套“工作副本 -> bak -> 官方下载”规则；显式覆盖的
+# SOURCE_IMAGE 只会被校验，不会被默认镜像替换。
+scripts/images/prepare-qemu-image.sh "${IMAGE_KIND}" "${SOURCE_IMAGE}"
 if [[ ! -f "${GUEST_SCRIPT}" ]]; then
     echo "缺少 guest 探针脚本: ${GUEST_SCRIPT}" >&2
     exit 1
 fi
 
 if [[ "${SKIP_BUILD:-0}" != "1" ]]; then
-    make build "ARCH=${MAKE_ARCH}"
+    make build "PROFILE=${MAKE_PROFILE}"
 fi
 KERNEL_PATH="${KERNEL_ELF_OVERRIDE:-${REPO_ROOT}/${KERNEL_FILENAME}}"
 if [[ ! -f "${KERNEL_PATH}" ]]; then
@@ -138,9 +137,9 @@ echo "[3/4] 启动 8 vCPU/8 GiB QEMU"
 SAMPLER_PID=$!
 
 set +e
-timeout "${HOST_TIMEOUT}" make "${RUN_TARGET}" \
-    "ARCH=${MAKE_ARCH}" \
-    INITCODE_MODE=evaluation \
+timeout "${HOST_TIMEOUT}" make qemu-run \
+    "PROFILE=${MAKE_PROFILE}" \
+    MODE=evaluation \
     "KERNEL_ELF=${KERNEL_PATH}" \
     QEMU_MEM=8G \
     QEMU_SMP=8 \

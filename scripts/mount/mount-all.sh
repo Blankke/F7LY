@@ -10,19 +10,11 @@ IMAGE_DIR="$REPO_ROOT/images"
 sudo mkdir -p \
     /mnt/sdcard-rv \
     /mnt/sdcard-la \
-    /mnt/sdcard-rv-final \
-    /mnt/sdcard-la-final \
-    /mnt/sdcard-rv-onsite \
-    /mnt/sdcard-la-onsite \
-    /mnt/sdcard-rv-pub \
-    /mnt/sdcard-la-pub
+    /mnt/rootfs-rv \
+    /mnt/rootfs-la
 
-sudo mount -o loop "$IMAGE_DIR/sdcard-rv-pub.img" /mnt/sdcard-rv-pub
-sudo mount -o loop "$IMAGE_DIR/sdcard-la-pub.img" /mnt/sdcard-la-pub
-sudo mount -o loop "$IMAGE_DIR/sdcard-rv.img" /mnt/sdcard-rv
-sudo mount -o loop "$IMAGE_DIR/sdcard-la.img" /mnt/sdcard-la
-sudo mount -o loop "$IMAGE_DIR/sdcard-rv-final.img" /mnt/sdcard-rv-final
-sudo mount -o loop "$IMAGE_DIR/sdcard-la-final.img" /mnt/sdcard-la-final
+sudo mount -o loop "$IMAGE_DIR/oscomp-preliminary-riscv64.img" /mnt/sdcard-rv
+sudo mount -o loop "$IMAGE_DIR/oscomp-preliminary-loongarch64.img" /mnt/sdcard-la
+sudo mount -o loop "$IMAGE_DIR/oscomp-final-riscv64.img" /mnt/rootfs-rv
+sudo mount -o loop "$IMAGE_DIR/oscomp-final-loongarch64.img" /mnt/rootfs-la
 sudo ln -sf /mnt/sdcard-rv/musl/lib/libc.so /lib/ld-musl-riscv64.so.1
-sudo mount -o loop "$IMAGE_DIR/sdcard-rv-onsite.img" /mnt/sdcard-rv-onsite
-sudo mount -o loop "$IMAGE_DIR/sdcard-la-onsite.img" /mnt/sdcard-la-onsite

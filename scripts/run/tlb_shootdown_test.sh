@@ -80,11 +80,11 @@ check_and_repair_image() {
 
 run_arch() {
     local arch="$1"
-    local compiler kernel_arch kernel rootfs qemu binary temporary_rootfs timestamp log timeout_seconds rc managed_pages
+    local compiler kernel_profile kernel rootfs qemu binary temporary_rootfs timestamp log timeout_seconds rc managed_pages
     case "${arch}" in
         rv)
             compiler="riscv64-linux-gnu-gcc"
-            kernel_arch="riscv"
+            kernel_profile="riscv-qemu"
             kernel="${PROJECT_ROOT}/kernel-rv-shell"
             rootfs="${PROJECT_ROOT}/images/sdcard-rv.img"
             qemu="qemu-system-riscv64"
@@ -92,7 +92,7 @@ run_arch() {
             ;;
         la)
             compiler="loongarch64-linux-gnu-gcc"
-            kernel_arch="loongarch"
+            kernel_profile="loongarch-qemu"
             kernel="${PROJECT_ROOT}/kernel-la-shell"
             rootfs="${PROJECT_ROOT}/images/sdcard-la.img"
             qemu="qemu-system-loongarch64"
@@ -105,7 +105,7 @@ run_arch() {
     [[ -f "${rootfs}" ]] || die "缺少 rootfs：${rootfs}"
 
     echo "[TLB] 构建 ${arch} shell 内核与静态专项"
-    make -C "${PROJECT_ROOT}" build ARCH="${kernel_arch}" INITCODE_MODE=shell
+    make -C "${PROJECT_ROOT}" build PROFILE="${kernel_profile}" MODE=shell
     "${compiler}" -std=c11 -O2 -Wall -Wextra -Werror -static -pthread \
         "${SOURCE}" -o "${binary}"
 
