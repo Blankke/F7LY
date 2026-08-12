@@ -91,14 +91,19 @@ ifeq ($(PROFILE_ARCH),riscv)
 else ifeq ($(PROFILE_ARCH),loongarch)
   DEFAULT_CROSS_COMPILE := loongarch64-linux-gnu-
   ARCH_DEFINES := -DLOONGARCH
-  KERNEL_ABI_FLAGS := -march=loongarch64 -mabi=lp64s -mfpu=none
+  # LA264 真机对未对齐的多字节访存会触发 ALE。内核和内置 initcode
+  # 统一要求编译器生成严格对齐访问，避免 QEMU 掩盖真机故障。
+  LOONGARCH_ALIGNMENT_FLAGS := -mstrict-align
+  KERNEL_ABI_FLAGS := -march=loongarch64 -mabi=lp64s -mfpu=none \
+                      $(LOONGARCH_ALIGNMENT_FLAGS)
   # Linux 交叉 sysroot 同样只提供 lp64d glibc 头；头文件选择不改变
   # -mabi=lp64s -mfpu=none 约束的内核 soft-float 代码生成。
   KERNEL_SYSROOT_HEADER_FLAGS := \
       -U__loongarch_soft_float -D__loongarch_double_float
   KERNEL_ARCH_FLAGS := $(KERNEL_ABI_FLAGS) -mcmodel=normal \
                        $(KERNEL_SYSROOT_HEADER_FLAGS)
-  INITCODE_ABI_FLAGS := -march=loongarch64 -mabi=lp64d -mfpu=64
+  INITCODE_ABI_FLAGS := -march=loongarch64 -mabi=lp64d -mfpu=64 \
+                        $(LOONGARCH_ALIGNMENT_FLAGS)
   INITCODE_ARCH_FLAGS := $(INITCODE_ABI_FLAGS) -mcmodel=normal
   CONTEXT_ASM_FLAGS := -march=loongarch64 -mabi=lp64s -mfpu=64
   KERNEL_ARCH_NAME := la
