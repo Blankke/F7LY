@@ -177,7 +177,9 @@ RISC-V：
 LoongArch：
 
 - syscall ecode 为 `0xb`，`era += 4` 后进 syscall handler。
-- page fault ecode `0x1..0x7`；地址错误 `0x8/0x9` 直接 SIGSEGV。
+- page fault ecode `0x1..0x7`；地址错误 `0x8` 直接发送同步地址错误信号；
+  非对齐访问 `0x9` 先模拟普通整数/浮点 load/store，内存错误发送
+  `SIGSEGV`，无法模拟的对齐错误发送 `SIGBUS`。
 - `ESTAT` 同时包含异常编码和中断 pending，`devintr()` 必须先确认 ecode 为 0 再分发中断。
 - 对“PTE 合法但 TLB 残留旧状态”的用户页，先按页失效 TLB 重试。
 - `usertrapret()` 会按当前线程 trapframe 动态重映射 TRAPFRAME，并尽量减少 TLB 失效，避免破坏 LL/SC。
