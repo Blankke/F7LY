@@ -24,10 +24,8 @@
 #elif defined(LOONGARCH)
 #include "loongarch/pagetable.hh"
 #endif
-#ifdef RISCV
-#include "sbi.hh"
-#endif
 #include "hal/cpu.hh"
+#include "platform/power.hh"
 #include "timer_manager.hh"
 // #include "fs/vfs/path.hh"
 #include "fs/vfs/file/device_file.hh"
@@ -6956,15 +6954,9 @@ namespace syscall
         {
             printfRed("[sys_shutdown] sync before shutdown failed: %d\n", sync_ret);
         }
-#ifdef RISCV
-        sbi_shutdown();
-        printfYellow("sys_shutdown\n");
-        sbi_shutdown();
-#elif defined(LOONGARCH)
-        *(volatile uint8 *)(0x8000000000000000 | 0x100E001C) = 0x34;
-// while (1);
-#endif
-        return 0;
+        // 关机寄存器属于平台契约：QEMU 写 ACPI 端口，实机在没有安全
+        // poweroff 控制器时永久停驻，系统调用层不能再保存板级 MMIO 地址。
+        platform::power::shutdown();
     }
     uint64 SyscallHandler::sys_soft_reboot_phase()
     {
