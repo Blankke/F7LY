@@ -1,6 +1,6 @@
 = 中断与陷阱处理
 
-决赛阶段的中断改动围绕一个边界展开：架构代码识别 trap、保存和恢复上下文，平台中断控制器负责 claim/complete，设备驱动负责判断自己的状态并处理事件，公共 IRQ 层只负责登记和分发。这样可以同时覆盖 RISC-V PLIC、LoongArch 平台中断控制器、定时器和跨核 IPI，而不在 trap 入口堆叠板级设备分支。
+决赛阶段的中断改动围绕一个边界展开：架构代码识别 trap、保存和恢复上下文，平台中断控制器负责取出并结束中断，设备驱动负责判断自己的状态并处理事件，公共 IRQ 层只负责登记和分发。这样可以同时覆盖 RISC-V PLIC、LoongArch 平台中断控制器、定时器和跨核 IPI，而不在 trap 入口堆叠板级设备分支。
 
 == 统一中断分发模型
 
@@ -8,9 +8,9 @@
 
 设备初始化时先通过 `register_handler(source, handler, context, name)` 登记中断源及其所有者。IRQ registry 保存有限数量的共享处理函数，允许 PCI INTx 等场景由多个设备共享 source；控制器初始化时只启用已经登记的 source。重复登记同一 handler/context 会被视为幂等操作，未登记或超出平台能力的 source 不会被静默打开。
 
-=== claim—dispatch—complete
+=== 确认来源、调用处理函数并结束中断
 
-架构 trap 收到外部中断后只调用公共 `hal::irq::dispatch()`。该函数从当前平台 backend 取得不可拆分的 `ClaimToken`，遍历 pending source，对每个 source 调用已登记的 handler，最后使用原始 controller token 完成中断。处理函数必须自行确认设备状态；公共层不再按 UART、块设备或网卡写硬编码分支。
+架构 trap 收到外部中断后只调用公共 `hal::irq::dispatch()`。该函数先从当前平台 backend 确认是哪一个中断源发出请求，再找到这个中断源对应的处理函数并调用它，最后使用同一次确认得到的信息通知控制器“处理完成”。处理函数必须自行确认设备状态；公共层不再按 UART、块设备或网卡写硬编码分支。
 
 这种设计有两个不变量：一是 claim 与 complete 属于同一控制器事务，不能根据处理后的 pending 位图反推 token；二是没有 handler 的 source 只能记录一次诊断并完成控制器事务，不能让一个未知中断永久占住外部中断入口。
 
@@ -34,7 +34,7 @@ void dispatch() {
 }
 ```
 
-`controller_token` 从 `claim()` 原样传给 `complete()`，因此设备 handler 改变 pending 状态也不会破坏控制器事务；没有 handler 时仍会执行 complete。
+控制器返回的中断标识会原样用于结束这次中断，因此设备处理函数改变 pending 状态也不会破坏控制器状态；没有对应处理函数时仍会执行结束操作。
 
 === 全局控制器与每核上下文
 
@@ -81,9 +81,9 @@ int devintr() {
 
 == LoongArch 中断路径
 
-=== ECODE 与 pending bit 分离
+=== 区分异常和外部中断
 
-LoongArch 的 `ESTAT` 同时包含异常编码和中断 pending 位。trap 处理必须先区分同步异常与外部中断，只有确认 ECODE 表示中断时才进入设备分发；否则会把页错误、地址错误或系统调用误判成 timer/设备中断。用户 syscall 使用 `era += 4` 返回，页错误则进入统一缺页路径，无法修复时转换为 SIGSEGV。
+LoongArch 的 `ESTAT` 同时记录异常类型和等待处理的中断。trap 处理先看异常类型：系统调用、页错误和地址错误进入各自的同步异常路径；确认确实是外部中断后，才继续分发定时器、设备或 IPI。这样不会把页错误、地址错误或系统调用误判成 timer/设备中断。用户 syscall 使用 `era += 4` 返回，页错误则进入统一缺页路径，无法修复时转换为 SIGSEGV。
 
 === CPU 槽位、IPI 与定时器
 

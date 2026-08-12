@@ -4,7 +4,7 @@
 
 == 同步等待与唤醒
 
-=== futex key 与等待队列
+=== futex 等待任务的匹配与排队
 
 futex 不直接以用户虚拟地址作为全局键。内核根据私有/共享属性把地址转换为进程私有键或物理页键，再在固定 bucket 中登记等待者。等待者保存 key、期望值、超时结果和所属 PCB，wakeup 只扫描匹配 key 的候选任务。
 
@@ -30,7 +30,7 @@ WAKE 使用相同的锁顺序筛选并唤醒匹配任务。这样既避免一个
 
 futex 超时由定时器提供唤醒机会，线程被唤醒后仍重新检查 futex 状态，区分正常唤醒、超时和信号中断。线程退出时遍历用户态 robust list，对仍由该线程持有的 robust futex 设置 owner-died 状态并唤醒等待者，保证 pthread 锁不会永久占用。
 
-=== requeue 与锁语义
+=== 条件变量等待者的转移
 
 条件变量常通过 `FUTEX_REQUEUE` 将等待者从一个 bucket 转移到 mutex bucket。转移过程保持 key、等待结果和锁顺序一致，避免先唤醒后重排导致的重复唤醒。`CLONE_CHILD_CLEARTID` 退出清零也复用 futex wake，使 pthread join 能够观察线程退出。
 
@@ -44,7 +44,7 @@ futex 超时由定时器提供唤醒机会，线程被唤醒后仍重新检查 f
 
 FIFO 在 VFS 中由 FIFO manager 维护同一路径对应的读写端配对状态，打开操作可以等待另一端出现。底层数据传输仍复用 pipe file 的读写和 sleep/wakeup 逻辑，避免路径对象和匿名管道出现两套阻塞语义。
 
-== 共享内存与 memfd
+== 共享页面与匿名文件
 
 === SysV 共享内存
 

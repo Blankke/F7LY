@@ -14,11 +14,11 @@ VirtIO block 驱动改为读取设备真实 capacity，不再假设固定 4 GiB�
 
 == ext4 并发与缓存
 
-=== 可重入 mount lock
+=== 挂载操作的并发保护
 
 ext4 的低层操作可能递归获取 inode、目录和 block cache 状态。本阶段使用记录持有者 PCB 和递归深度的 FIFO 睡眠锁，并在进入直接 `ext4_fs_get_inode_ref()` 的 VFS 路径时安装 `Ext4MountGuard`。同线程嵌套调用只增加深度，其他线程按 FIFO 睡眠，释放时精确唤醒下一个等待者。
 
-=== bcache 的 dirty/LRU 管理
+=== 块缓存的修改与淘汰
 
 块缓存同时维护 LRU 链、按 LBA 的查找树和 dirty 链。dirty 链改为双向 TAILQ，插入和删除为 O(1)；缓存描述符从动态池取得，避免高并发下频繁分配内核 heap。引用计数、重复释放和链表指针损坏改为现场断言，使缓存一致性错误尽早暴露。
 
@@ -35,7 +35,7 @@ void insert_dirty(ext4_buf *buf) {
 
 写回路径在 buffer 仍被引用时不回收它；最后一个引用释放后，根据 write-back 状态决定保留、刷盘或从 LRU 淘汰，避免已关闭文件重新看到旧 inode EOF。
 
-=== 写回、fsync 与最后关闭
+=== 文件数据同步与关闭处理
 
 完整块写和小块写都先进入 bcache 并标记 dirty，再由 write-back 或显式 fsync/fdatasync 提交到底层设备。普通文件最后一次 close 会刷新合并写和 inode 可见性，确保后续打开、stat、目录遍历和其他进程读取到相同的文件大小与内容。
 

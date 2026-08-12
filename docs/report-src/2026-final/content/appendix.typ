@@ -40,12 +40,12 @@
 == 附录 C　平台与构建矩阵 <sec:appendix-platform-matrix>
 
 #table(
-  columns: (1.5fr, 1fr, 1fr, 2.5fr, 2fr),
+  columns: (3.6cm, 2.2cm, 1.8cm, 4.2cm, 3.4cm),
   table.header([*Profile*], [*架构*], [*运行方式*], [*主要设备组合*], [*典型用途*]),
-  [`riscv-qemu`], [RISC-V], [QEMU], [PLIC、VirtIO MMIO], [evaluation、CAgent、BuildStorm],
-  [`loongarch-qemu`], [LoongArch], [QEMU], [PCH/ExtIOI、VirtIO PCI], [evaluation、CAgent、BuildStorm],
-  [`riscv-visionfive2`], [RISC-V], [实机], [PLIC、DWMMC/SD、GMAC1], [平台构建与板级适配],
-  [`loongarch-2k1000`], [LoongArch], [实机], [LIOINTC、AHCI、GMAC、RTC], [平台构建与板级适配],
+  [#text(size: 8.5pt)[`riscv-qemu`]], [RISC-V], [QEMU], [PLIC、VirtIO MMIO], [evaluation、CAgent、BuildStorm],
+  [#text(size: 8.5pt)[`loongarch-qemu`]], [LoongArch], [QEMU], [PCH/ExtIOI、VirtIO PCI], [evaluation、CAgent、BuildStorm],
+  [#text(size: 8.5pt)[`riscv-visionfive2`]], [RISC-V], [实机], [PLIC、DWMMC/SD、GMAC1], [平台构建与板级适配],
+  [#text(size: 8.5pt)[`loongarch-2k1000`]], [LoongArch], [实机], [LIOINTC、AHCI、GMAC、RTC], [平台构建与板级适配],
 )
 
 常用构建命令如下：

@@ -25,11 +25,11 @@ p->_running_cpu = -1;
 
 == SMP 调度
 
-=== 每核 runnable 位图
+=== 每个 CPU 的可运行任务列表
 
-多核调度保留每核扫描游标，并为每个 home CPU 建立 runnable 位图和压力计数。任务进入 RUNNABLE 时登记到所属 home CPU，离开 RUNNABLE 时清除；调度器先读取目标 CPU 的活跃位图，再获取 PCB 锁确认状态和执行权，避免对整个进程表进行无效扫描。
+多核调度保留每核扫描游标，并为每个 home CPU 建立可运行任务位图和压力计数。任务进入 `RUNNABLE` 状态时登记到所属 home CPU，离开该状态时清除；调度器先读取目标 CPU 的可运行任务位图，再获取 PCB 锁确认状态和执行权，避免对整个进程表进行无效扫描。
 
-新的可运行任务根据 CPU affinity 和各 home CPU 的原子压力选择初始 CPU。该选择是 O(NUMCPU) 的，适合 8 核配置；运行期间不强制迁移任务，以保持 guest 睡眠、定时和文件操作的稳定性。目标 CPU 没有任务时，唤醒路径通过语义化 IPI 通知其重新检查 runnable 位图。
+新的可运行任务根据 CPU affinity 和各 home CPU 的原子压力选择初始 CPU。该选择是 O(NUMCPU) 的，适合 8 核配置；运行期间不强制迁移任务，以保持 guest 睡眠、定时和文件操作的稳定性。目标 CPU 没有任务时，唤醒路径通过语义化 IPI 通知其重新检查可运行任务位图。
 
 === 调度与优先级
 
@@ -79,9 +79,9 @@ execve 先在新的 `ProcessMemoryManager` 中解析 ELF、PT_INTERP、动态链
 
 退出线程先进入 ZOMBIE，保留 wait 所需的退出码、tid/tgid 和资源摘要；父线程通过 wait/wait4 回收，若父线程先退出则由新的父进程接管。SIGCHLD、子进程状态变化和 wait 睡眠使用同一套父子等待锁，避免状态已经发布但父进程没有被唤醒。
 
-=== mm 最后引用回收
+=== 进程退出时回收共享内存
 
-线程退出时先从 PCB 摘除 mm 指针，再以原子引用递减结果决定是否执行最终 `free_all_memory()`。最后一个引用归零且没有活跃 CPU 使用该 mm 后，才释放页表、VMA、VmObject 和 ASID；该规则与第四章的地址空间同步共同保证 exec、clone 失败和并发 exit 不会重复释放内存。
+线程退出时先从 PCB 摘除地址空间指针，再以原子引用递减结果决定是否执行最终 `free_all_memory()`。最后一个引用归零且没有活跃 CPU 使用该地址空间后，才释放页表、VMA、VmObject 和 ASID；该规则与第四章的地址空间同步共同保证 exec、clone 失败和并发 exit 不会重复释放内存。
 
 == 验证结果
 
