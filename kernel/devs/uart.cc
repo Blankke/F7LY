@@ -37,6 +37,7 @@ void register_debug_uart(CharDevice *uart_port)
 bool UartManager::initialize()
 {
     _lock.init("uart");
+    _write_transaction_lock.init("uart-write");
     _write_index = 0;
     _read_index = 0;
     _pending_input_valid = false;
@@ -67,8 +68,16 @@ bool UartManager::write_ready()
 
 int UartManager::put_char_sync(u8 character)
 {
+    _write_transaction_lock.acquire();
+    const int result = put_char_sync_unserialized(character);
+    _write_transaction_lock.release();
+    return result;
+}
+
+int UartManager::put_char_sync_unserialized(u8 character)
+{
     // 同步输出也进入唯一发送队列，不能越过之前已经排队的字符。
-    if (put_char(character) < 0)
+    if (put_char_unserialized(character) < 0)
     {
         return -1;
     }
@@ -88,6 +97,14 @@ int UartManager::put_char_sync(u8 character)
 }
 
 int UartManager::put_char(u8 character)
+{
+    _write_transaction_lock.acquire();
+    const int result = put_char_unserialized(character);
+    _write_transaction_lock.release();
+    return result;
+}
+
+int UartManager::put_char_unserialized(u8 character)
 {
     if (k_printer.is_panic())
     {
@@ -120,6 +137,28 @@ int UartManager::put_char(u8 character)
         _lock.release();
         return 0;
     }
+}
+
+long UartManager::put_chars_sync(const u8 *source, long nbytes)
+{
+    if (source == nullptr || nbytes <= 0)
+    {
+        return 0;
+    }
+
+    // 同一次批量写入中的字节必须连续提交，不能被其它输出生产者穿插。
+    // 事务锁只串行化生产者；发送队列与 IRQ 排空仍由 _lock 独立保护。
+    _write_transaction_lock.acquire();
+    long written = 0;
+    for (; written < nbytes; ++written)
+    {
+        if (put_char_sync_unserialized(source[written]) < 0)
+        {
+            break;
+        }
+    }
+    _write_transaction_lock.release();
+    return written;
 }
 
 int UartManager::get_char_sync(u8 *character)

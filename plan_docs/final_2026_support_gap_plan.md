@@ -1,6 +1,6 @@
 # 2026 决赛内核能力缺口计划：CAgent / BuildStorm
 
-状态：BuildStorm `core` 阶段停顿根因已修复、待用户完整验收；代码、高风险审计、优化实现和双架构短验证已收口，官方隔离 BuildStorm 两轮及缺失的 Docker harness 双架构 workflow 按用户边界留待外部长测
+状态：LoongArch BuildStorm 完整正式构建已通过、CAgent 并发结果行已稳定；重复长测和 Docker harness 双架构 workflow 按用户边界留待外部验收
 
 日期：2026-07-29
 
@@ -20,10 +20,12 @@
 - [x] 2026-08-08 BuildStorm `core` 阶段远端 TLB 等待根因修复完成待验收：修复前 8 vCPU 三份间隔 20 秒诊断快照显示远端 TLB shootdown 调用与累计等待持续增长，且 1 vCPU 不再触发远端调用；修复后 ASID 随 `ProcessMemoryManager` 生命周期管理，`CLONE_VM` 线程共享 mm/ASID，用户页表更新只同步活跃 mm CPU。RV/LA evaluation 与 shell 四种构建及 8 vCPU/8 GiB/20 轮 TLB/VMA 短测均通过；完整 BuildStorm 仍由用户执行，不在此项中冒充完成。
 - [x] 2026-08-08 BuildStorm `core` 阶段 ext4 剩余性能根因已完成代码修复待验收：诊断显示 ext4 ticket/owner 正常推进但全局挂载锁等待和累计周期占主要成本；读路径现使用共享挂载锁，bcache 单独串行化，完整块写入改为 write-back，直接块 I/O 移出全局排他临界区，并修复同 owner 嵌套 mount guard。双架构 8 vCPU/8 GiB 并发 `write/fsync/rename/read/unlink` 短测与临时镜像只读 `e2fsck` 均通过。
 - [x] 2026-08-09 有界官方进度探针已读取完整结果：最终受控日志 `logs/run/output_r_20260809-073601_buildstorm-perf.txt` 在 8 vCPU、8 GiB、guest 1200 秒内实际输出 `Compiling compiler_builtins` 与 `Compiling core v0.0.0`，产物计数曾达到 27，但未输出后续 `Compiling`，退出 `rc=124`；这证明“仅 Cargo/rustc 存活或产物增长”的证据不足，也明确保留完整 BuildStorm 外部验收门槛。
+- [x] 2026-08-12 LoongArch BuildStorm 崩溃根因修复完成待验收：普通 TLB 表项覆盖相邻双页，原范围失效从 4 KiB 奇数页起步却按 8 KiB 递增，会漏掉区间末端 pair；现统一把半开区间扩张到双页边界，溢出时保守失效全部非全局项。增强专项在旧内核稳定报告 5/10 次预期 fault、修复后 RV/LA 各 50 轮得到 100/100 fault；LA 8 vCPU/8 GiB 正式 BuildStorm 完整输出 `ok=true`，产物 1714568 字节、guest 耗时 1425.69 秒，无 rustc ICE、panic 或 shootdown timeout，证据为 `logs/run/output_l_20260812-104222_buildstorm-perf.txt`。
+- [x] 2026-08-12 CAgent 并发结果误判修复完成待验收：十个后台 agent 的校验实际通过，但 stdout/stderr 原先逐字符获取 UART 锁，会把多个 `testcase cagent ... pass` 行交错成不可解析文本。字符设备新增批量同步写契约，UART 用独立输出事务锁串行化一次 `write()`，同时保留 IRQ 使用原队列锁排空；修复后 LA 连续 5 轮、RV 连续 3 轮均严格得到 10 个唯一项且全部 pass，无 reject、panic 或粘连行。
 - [ ] 2026-08-01 外部验收仍开放并由用户执行：完整 BuildStorm 在无其它 QEMU 竞争时串行跑完两轮，恢复 harness 后再跑两轮双架构 workflow；未取得这些长测证据前，不把这些外部项误标为已验收。
 
 - CAgent：F7LY 的基础内核能力已经覆盖较多。动态 ELF/glibc、进程创建与 exec、基础时间、文件创建/读写/目录遍历、socket 和 TCP/UDP 路径都存在，暂时看不到必须重做内核架构的缺口。主要差距是若干 Linux 语义不完整或返回固定值，需要针对 10 个 CAgent 测试逐项验证。
-- BuildStorm：动态 8G PMM、SMP HAL、通用 TLB shootdown 和实际 CPU 并行能力已经通过双架构 QEMU 短验收；尚缺 RISC-V selfhost rootfs 下的 Cargo/ext4 长压力证据。多线程/futex/信号、mmap/缺页/页回收、ext4/bcache 并发元数据与写回仍需由该长压力继续覆盖。
+- BuildStorm：动态 8G PMM、SMP HAL、通用 TLB shootdown 和实际 CPU 并行能力已经通过双架构 QEMU 验收；RV 用户基线与 LA 修复后各有一轮完整 Cargo/ext4 长构建 PASS，当前只保留重复轮次和 Docker harness 外部验收。
 - 现有 syscall 绑定数量不能作为完成度指标。F7LY 的很多关键 syscall 已有函数实现，但仍带 TODO、固定返回值、错误路径 panic 或只覆盖部分 Linux 语义；应以 Rust 工具链和 CAgent 的真实 syscall 轨迹验收。
 - [x] 2026-07-26：官方 `final2.1` 双架构镜像、8 核/8 GiB QEMU 参数和两道 glibc runner 已接入，代码完成待验收。首次实测已暴露 RV ext4 bcache 并发损坏，以及 LA 动态库搜索和 `/work/tgoskits` 访问失败，尚未达到赛题通过门槛。
 - [x] 2026-07-26 收尾：移除内核中面向 Cargo/BuildStorm 的临时串口跟踪；LoongArch initcode 恢复为 CAgent + BuildStorm 双题入口；BuildStorm runner 保留 `/bin/sh /glibc/buildstorm_testcode.sh` 调用但去掉 `sh -x` 跟踪，避免污染官方日志。
@@ -297,7 +299,8 @@ Starry 的经验说明：F7LY 当前最需要补的是“容量、并发、回�
 - [x] 2026-08-11 可复用性能观测框架完成待验收：`PERF_DIAG=1` 提供统一指标表、per-CPU epoch 计数、syscall 耗时、timer/PMU 热点与可选调用链、`/proc/f7ly/perf` v1 TSV ABI、双架构静态 `f7ly-perf` 和两阶段内核符号表；普通 RV/LA 内核已确认无相关符号及 ABI 字符串。双架构短 smoke 覆盖 status、stat、timer 平面/调用链、auto 回退、显式 PMU 不支持、reset/epoch 和非法命令，最终日志为 `logs/run/output_r_20260811-205033_buildstorm-perf.txt` 与 `logs/run/output_l_20260811-205133_buildstorm-perf.txt`；未运行完整 BuildStorm 或 Docker autotest。
 - [x] 2026-08-11 clone 缺页锁生命周期修复完成待长验收：GDB 证实 `CLONE_CHILD_SETTID` 在持有未发布子 PCB 自旋锁时触发 `copy_out -> fault_page -> memory_lock sleep`，导致 scheduler 的 `num_off==1` 不变量失败。现子任务保持 `USED`，`CHILD/PARENT_SETTID` 用户写入在不持子 PCB 锁时完成，再一次性发布 `RUNNABLE`；创建失败回滚也不再带非当前 PCB 锁进入可睡眠资源清理。RV 5 分钟原路径复跑越过 `libc v0.2.186`，继续编译到 `ax-posix-api`，无 panic/assert/kerneltrap；未替代完整 BuildStorm 长验收。
 - [x] 2026-08-11 mm 最后引用并发归还修复完成待长验收：`free_all_memory()` 的本次原子 `fetch_sub` 结果现在唯一决定最终清理与 `delete` 所有权，PCB 在归还前先摘掉 mm 指针，创建失败和 exec 回滚也使用同一契约，消除非最后线程误删正在 teardown 的 mm 及持有者误计泄漏窗口。RV 24 轮×8 线程原始 `SYS_exit` 竞态专项通过，无 panic/引用漂移/最终销毁断言；RV/LA evaluation 构建与无浮点门禁通过，未运行完整 BuildStorm。
-- [ ] 待完成：在不受其它 QEMU 抢占的环境中跑完 RV/LA 官方完整 BuildStorm，记录最终产物、总耗时和至少两次重复数据；当前结果只证明冷启动与前段编译显著加速，不宣称完整 446 项构建已经通过。
+- [x] 2026-08-12 LA 完整 BuildStorm 单轮通过待重复验收：正式路径从 toolchain/minibuild 运行至并行 Cargo 完成，输出文件 1714568 字节，guest 耗时 1425.69 秒；完整日志无 rustc ICE、panic 或 shootdown timeout。原始决赛镜像 `e2fsck -fn` 返回 0；探针临时镜像的 inode 558/560 提示来自 `debugfs unlink + write` 替换两份 runner 的注入副作用，不是 guest 文件系统损坏。
+- [ ] 待完成：在不受其它 QEMU 抢占的环境中让 RV/LA 各取得至少两次完整 BuildStorm 重复数据；当前 RV 用户基线日志和 LA 修复后日志各有一轮完整 PASS，尚不把单轮结果记为双架构重复长测全部验收。
 
 ## 6. 内核能力验收门槛
 
@@ -316,10 +319,10 @@ Starry 的经验说明：F7LY 当前最需要补的是“容量、并发、回�
 - [x] 2026-07-29 LA 最小实编译与官方正常启动完成待验收；完整 `cargo xtask arceos build` 仍按下一项单独验收。
 - [x] 2026-07-29 RV/LA 官方 BuildStorm 前段完成待验收：两架构均通过 toolchain 与 minibuild，从 `Resolving dependency graph...` 继续真实并行启动 `unicode-ident`、`quote`、`proc-macro2`、`libc`、`cfg-if`、`log`、`find-msvc-tools` 等 crate；LA 同轮先完成 CAgent 10/10，日志中未见 panic、锁断言或 shootdown timeout。
 - [x] 2026-08-01 已修复并短验收 `Compiling core` 暴露的 futex/PCB 锁序死锁；双架构四个 futex 语义用例通过，修复后 GDB 不再存在原两 CPU 闭环。
-- [ ] cargo build script、proc-macro、多线程 futex/信号/等待链路稳定；
-- [ ] 完整 `cargo xtask arceos build` 能从零完成，产物不小于 500KB；
-- [ ] 构建过程无内存 panic、文件系统损坏、死锁、丢唤醒、页表错误和设备中断错误；
-- [ ] `/proc/uptime` 和 `cores` 为真实内核状态，能够用于官方耗时判定。
+- [x] cargo build script、proc-macro、多线程 futex/信号/等待链路已由 RV/LA 各一轮完整构建覆盖；
+- [x] 完整 `cargo xtask arceos build` 已在 RV/LA 从零完成，产物分别为 1681000 和 1714568 字节；
+- [x] 两轮完整构建无内存 panic、文件系统损坏、死锁、丢唤醒、页表错误或设备中断错误；
+- [x] `/proc/uptime` 和 `cores` 使用真实内核状态，正式结果均记录 `cores=8` 和 guest elapsed；重复轮次仍由前述独立开放项约束。
 
 ## 7. 当前不应误判的地方
 

@@ -103,24 +103,45 @@ namespace
     {
         F7LY_PERF_ADD(TlbFlush, 1);
         asm volatile("dbar 0" ::: "memory");
-        if (size == 0)
+        const auto flush_all_non_global = []()
         {
             F7LY_PERF_ADD(TlbFullFlush, 1);
-            // 0x3 是当前 ASID 的全量失效；普通映射更新优先使用下面的
-            // 0x6 按 VA+ASID 失效，避免影响同一 CPU 上其它地址空间。
+            // INVTLB op=0x3 失效全部 G=0 表项。范围异常时宁可保守扩大
+            // 失效范围，也不能因无符号地址回绕留下可访问的旧翻译。
             asm volatile("invtlb 0x3, $zero, $zero" ::: "memory");
+        };
+        if (size == 0)
+        {
+            flush_all_non_global();
             asm volatile("dbar 0" ::: "memory");
             return;
         }
 
-        uint64 normalized_start = PGROUNDDOWN(start);
-        uint64 normalized_end = PGROUNDUP(start + size);
-        for (uint64 va = normalized_start; va < normalized_end; va += (PGSIZE << 1))
+        // LoongArch 一个普通 TLB 表项覆盖相邻两个 4 KiB 页。失效任意
+        // 半开区间 [start, start + size) 时，必须先扩张到双页表项边界，
+        // 再逐表项处理，保证区间接触到的每个翻译都被失效。
+        constexpr uint64 k_tlb_pair_size = PGSIZE << 1;
+        constexpr uint64 k_tlb_pair_mask = k_tlb_pair_size - 1;
+        constexpr uint64 k_uint64_max = ~static_cast<uint64>(0);
+        const uint64 range_end = start + size;
+        if (range_end < start || range_end > k_uint64_max - k_tlb_pair_mask)
+        {
+            flush_all_non_global();
+            asm volatile("dbar 0" ::: "memory");
+            return;
+        }
+
+        const uint64 normalized_start = start & ~k_tlb_pair_mask;
+        const uint64 normalized_end =
+            (range_end + k_tlb_pair_mask) & ~k_tlb_pair_mask;
+        for (uint64 pair_base = normalized_start;
+             pair_base < normalized_end;
+             pair_base += k_tlb_pair_size)
         {
             asm volatile("invtlb 0x6, %0, %1"
                          :
                          : "r"(static_cast<uint64>(asid)),
-                           "r"(va & ~((PGSIZE << 1) - 1))
+                           "r"(pair_base)
                          : "memory");
         }
         asm volatile("dbar 0" ::: "memory");

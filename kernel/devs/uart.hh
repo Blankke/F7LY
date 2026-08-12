@@ -26,6 +26,7 @@ namespace dev
 
         int put_char_sync(u8 character) override;
         int put_char(u8 character) override;
+        long put_chars_sync(const u8 *source, long nbytes) override;
         int get_char_sync(u8 *character) override;
         int get_char(u8 *character) override;
         int handle_intr() override;
@@ -40,12 +41,17 @@ namespace dev
 
         // 调用者必须持有 _lock；只把已经排队的字符提交给平台发送端。
         void start_transmit_locked();
+        // 调用者必须持有 _write_transaction_lock；允许整次 write() 复用同一事务。
+        int put_char_unserialized(u8 character);
+        int put_char_sync_unserialized(u8 character);
         constexpr bool output_buffer_full() const
         {
             return _write_index - _read_index >= k_output_buffer_size;
         }
 
         SpinLock _lock;
+        // 只串行化输出生产者，不参与 IRQ 排空，避免并发 write() 逐字符交错。
+        SpinLock _write_transaction_lock;
         char _output_buffer[k_output_buffer_size];
         ulong _write_index;
         ulong _read_index;

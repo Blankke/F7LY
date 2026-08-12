@@ -1,6 +1,6 @@
 # SMP HAL、stress-ng 与 BuildStorm 自编译执行计划
 
-状态：BuildStorm `core` 阶段停顿根因已修复、待用户完整验收；SMP、8 GiB PMM 和双架构 TLB 短测已完成 QEMU 验收，官方长测仍由用户执行
+状态：LoongArch BuildStorm 完整正式构建已通过待重复验收；SMP、8 GiB PMM 和双架构 TLB 专项已完成 QEMU 验收
 
 日期：2026-07-18
 
@@ -350,4 +350,5 @@ git diff --check
 - [x] 2026-08-09 完成 TLB/ASID 后续链路收口：地址空间级 ASID、活跃 CPU mask、generation 和定向范围失效已接入 RV/LA；双架构强制 evaluation/shell 构建以及 20 轮、8 vCPU TLB/VMA 短测通过。
 - [x] 2026-08-09 完成有证据支持的剩余热路径修复：ext4 读写锁与 bcache 分离、futex 物理 key 分桶和统一摘链、普通 wait channel 分桶、FUTEX_WAKE_OP ABI 解码、per-CPU runnable 位图、特殊映射缓存、退出延迟回收和 allocator double-free 诊断；没有修改官方 Cargo 命令、并行参数、uptime、crate 清单或 target 复用策略。
 - [x] 2026-08-09 完成非 BuildStorm 验收：RV/LA ext4 并发短测及临时镜像只读 `e2fsck` 通过；四个基础 futex 小测双架构均 TPASS，额外 `futex_wait02/03/05` 双架构均 TPASS。`futex_wake02` 在 shell rootfs 缺少可用 `/proc/<pid>/task` 且无法挂载 proc 的环境下报告 TBROK，属于测试环境限制，未作为内核 PASS 证据。
-- [ ] 待用户在无其它 QEMU 竞争的环境中完整运行官方 BuildStorm，确认从零编译产物、总耗时和至少两次重复结果；本轮不把短测或构建通过写成完整 BuildStorm PASS。
+- [x] 2026-08-12 修复 LA 双页 TLB 范围失效末端漏刷：两页区间从奇数页开始时，旧实现只失效首个 8 KiB pair，增强专项在旧内核稳定失败；修复后 RV/LA 8 vCPU、8 GiB、50 轮均通过，每架构捕获 100/100 次预期 fault。随后 LA 正式 BuildStorm 完整通过，产物 1714568 字节、guest 耗时 1425.69 秒，无 rustc ICE、panic 或 shootdown timeout。
+- [ ] 待用户在无其它 QEMU 竞争的环境中让 RV/LA 各取得至少两次完整 BuildStorm 重复结果；当前 RV 用户基线日志和 LA 修复后日志各有一轮完整 PASS，不把单轮结果写成双架构重复长测全部验收。

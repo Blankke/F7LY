@@ -208,11 +208,7 @@ namespace dev
 			printfYellow( "未绑定流" );
 			return 0;
 		}
-		u8 * ptr = ( u8 * ) src;
-		for ( long i = 0; i < nbytes; i++, ptr++ )
-			if ( _stream->put_char_sync( *ptr ) < 0 )
-				return i;
-		return nbytes;
+		return _stream->put_chars_sync( reinterpret_cast<const u8 *>(src), nbytes );
 	}
 
 	long ConsoleStdout::read( void *, long, bool )
@@ -232,11 +228,7 @@ namespace dev
 			printfYellow( "stream not be bound" );
 			return 0;
 		}
-		u8 * ptr = ( u8 * ) src;
-		for ( long i = 0; i < nbytes; i++, ptr++ )
-			if ( _stream->put_char_sync( *ptr ) < 0 )
-				return i;
-		return nbytes;
+		return _stream->put_chars_sync( reinterpret_cast<const u8 *>(src), nbytes );
 	}
 
 	long ConsoleStderr::read( void *, long, bool )

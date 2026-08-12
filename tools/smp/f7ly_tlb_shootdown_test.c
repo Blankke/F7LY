@@ -5,9 +5,11 @@
  *   riscv64-linux-gnu-gcc -O2 -static -pthread f7ly_tlb_shootdown_test.c -o tlb-test-rv
  *   loongarch64-linux-gnu-gcc -O2 -static -pthread f7ly_tlb_shootdown_test.c -o tlb-test-la
  *
- * CPU1 先写共享页，使本地 TLB 缓存“可写”权限；CPU0 随后把同一页降为只读。
- * CPU1 的下一次写入必须收到 SIGSEGV。随后还会撤销映射，让 CPU1 再次
- * 触发 SIGSEGV，再由 CPU0 在同一虚拟地址建立全新匿名页并验证新翻译。
+ * CPU1 先写共享页，使本地 TLB 缓存“可写”权限；CPU0 随后把覆盖该页的
+ * 两页区间降为只读。区间刻意从奇数虚拟页开始，覆盖 LoongArch 双页 TLB
+ * 跨越两个 pair 的边界。CPU1 的下一次写入必须收到 SIGSEGV。随后还会撤销
+ * 整段映射，让 CPU1 再次触发 SIGSEGV，再由 CPU0 在原地址建立全新匿名页
+ * 并验证新翻译。
  */
 
 #define _GNU_SOURCE
@@ -43,6 +45,8 @@ static _Atomic int g_phase = PHASE_STOP;
 static _Atomic int g_failures = 0;
 static _Atomic int g_faults = 0;
 static _Atomic int g_worker_ready = 0;
+static void *g_range;
+static size_t g_range_size;
 static volatile uint64_t *g_page;
 static int g_rounds = 200;
 
@@ -91,7 +95,9 @@ static void wait_for_phase(int expected)
 {
     while (atomic_load_explicit(&g_phase, memory_order_acquire) != expected)
     {
-        sched_yield();
+        // 保持在用户态等待。若这里调用 sched_yield()，额外的 trap/ASID
+        // 切换可能顺带清掉 QEMU 的翻译缓存，掩盖真正的远端 shootdown 漏失。
+        atomic_signal_fence(memory_order_seq_cst);
     }
 }
 
@@ -185,16 +191,39 @@ int main(int argc, char **argv)
         fail("sigaction");
     }
 
-    g_page = mmap(NULL, (size_t)sysconf(_SC_PAGESIZE),
-                  PROT_READ | PROT_WRITE,
-                  MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (g_page == MAP_FAILED)
+    const size_t page_size = (size_t)sysconf(_SC_PAGESIZE);
+    const size_t reserve_size = page_size * 4;
+    void *reservation = mmap(NULL, reserve_size,
+                             PROT_NONE,
+                             MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (reservation == MAP_FAILED)
     {
-        fail("mmap");
+        fail("reserve odd-pair range");
     }
 
+    uintptr_t range_address = (uintptr_t)reservation;
+    if (((range_address / page_size) & 1U) == 0)
+    {
+        range_address += page_size;
+    }
+    if (munmap(reservation, reserve_size) != 0)
+    {
+        fail("release odd-pair reservation");
+    }
+
+    g_range_size = page_size * 2;
+    g_range = mmap((void *)range_address, g_range_size,
+                   PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
+    if (g_range == MAP_FAILED || g_range != (void *)range_address)
+    {
+        fail("mmap odd-pair range");
+    }
+    g_page = (volatile uint64_t *)(range_address + page_size);
+    printf("F7LY_TLB_SHOOTDOWN_RANGE start_page_parity=%lu pages=2 target_page=1\n",
+           (unsigned long)((range_address / page_size) & 1U));
+
     pin_current_thread(0);
-    const size_t page_size = (size_t)sysconf(_SC_PAGESIZE);
     pthread_t worker;
     int rc = pthread_create(&worker, NULL, worker_main, NULL);
     if (rc != 0)
@@ -204,20 +233,20 @@ int main(int argc, char **argv)
     }
     while (!atomic_load_explicit(&g_worker_ready, memory_order_acquire))
     {
-        sched_yield();
+        atomic_signal_fence(memory_order_seq_cst);
     }
 
     for (int round = 0; round < g_rounds; ++round)
     {
         wait_for_phase(PHASE_PRIME);
-        if (mprotect((void *)g_page, (size_t)sysconf(_SC_PAGESIZE), PROT_READ) != 0)
+        if (mprotect(g_range, g_range_size, PROT_READ) != 0)
         {
             fail("mprotect read-only");
         }
         atomic_store_explicit(&g_phase, PHASE_EXPECT_FAULT, memory_order_release);
         wait_for_phase(PHASE_FAULT_OBSERVED);
 
-        if (mprotect((void *)g_page, (size_t)sysconf(_SC_PAGESIZE),
+        if (mprotect(g_range, g_range_size,
                      PROT_READ | PROT_WRITE) != 0)
         {
             fail("mprotect read-write");
@@ -230,8 +259,8 @@ int main(int argc, char **argv)
             atomic_fetch_add_explicit(&g_failures, 1, memory_order_relaxed);
         }
 
-        void *fixed_address = (void *)g_page;
-        if (munmap(fixed_address, page_size) != 0)
+        void *fixed_address = g_range;
+        if (munmap(fixed_address, g_range_size) != 0)
         {
             fail("munmap shared page");
         }
@@ -239,7 +268,7 @@ int main(int argc, char **argv)
                               memory_order_release);
         wait_for_phase(PHASE_UNMAPPED_FAULT_OBSERVED);
 
-        void *remapped = mmap(fixed_address, page_size,
+        void *remapped = mmap(fixed_address, g_range_size,
                               PROT_READ | PROT_WRITE,
                               MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED,
                               -1, 0);
@@ -247,7 +276,8 @@ int main(int argc, char **argv)
         {
             fail("mmap MAP_FIXED remap");
         }
-        g_page = (volatile uint64_t *)remapped;
+        g_range = remapped;
+        g_page = (volatile uint64_t *)((uintptr_t)remapped + page_size);
         g_page[0] = 0x300000000ULL + (uint64_t)round;
         atomic_store_explicit(&g_phase, PHASE_EXPECT_REMAP, memory_order_release);
         wait_for_phase(PHASE_REMAP_OBSERVED);
@@ -279,7 +309,7 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    if (munmap((void *)g_page, page_size) != 0)
+    if (munmap(g_range, g_range_size) != 0)
     {
         fail("final munmap");
     }
