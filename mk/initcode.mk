@@ -31,11 +31,11 @@ INITCODE_ELF := $(BUILD_DIR)/user/initcode.elf
 INITCODE_BIN := $(BUILD_DIR)/user/initcode.bin
 
 INITCODE_CPPFLAGS := $(ARCH_DEFINES)
-INITCODE_CXXFLAGS := -Wall -O -fno-builtin -fno-exceptions -fno-rtti \
-                     -fno-stack-protector -nostdlib -ffreestanding \
+INITCODE_CXXFLAGS := -Wall -O -fno-exceptions -fno-rtti \
+                     -fno-stack-protector -ffreestanding \
                      $(INITCODE_ARCH_FLAGS) -Iuser/deps -Iuser/syscall_lib \
                      -Iuser/syscall_lib/arch/$(PROFILE_ARCH) -Ikernel/sys -Ikernel
-INITCODE_LDFLAGS := $(INITCODE_ABI_FLAGS) -static -nostdlib -e main -nodefaultlibs \
+INITCODE_LDFLAGS := $(INITCODE_ABI_FLAGS) -static -nostdlib -e main \
                     -Wl,--no-dynamic-linker,-T,$(INITCODE_LINK_SCRIPT)
 
 .PHONY: initcode

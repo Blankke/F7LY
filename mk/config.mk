@@ -28,15 +28,13 @@ endif
 # 公开构建入口会在递归子 make 中启用并行；QEMU 仍由串行父 make 独占终端。
 NPROC ?= $(shell nproc)
 
-# run/shell/debug 会先递归构建再占用终端。父 make 已有 jobserver 时必须继承
-# 它的并行上限；只有普通串行调用才为构建子 make 补上宿主 CPU 数。
-ifneq ($(strip $(findstring --jobserver-auth,$(MAKEFLAGS))$(findstring --jobserver-fds,$(MAKEFLAGS))),)
-  BUILD_SUBMAKE_JOBS :=
-else ifneq ($(filter -j%,$(MAKEFLAGS)),)
-  BUILD_SUBMAKE_JOBS :=
-else
-  BUILD_SUBMAKE_JOBS := -j$(NPROC)
-endif
+# run/shell/debug 会先递归构建再占用终端。MAKEFLAGS 中的 jobserver 参数在
+# Makefile 解析完成后才稳定，因此这里必须延迟到 recipe 展开时判断。父 make
+# 已经并行时直接继承它的令牌；只有普通串行调用才为构建子 make 补并行度。
+BUILD_SUBMAKE_JOBS = $(if $(strip \
+  $(findstring --jobserver-auth,$(MAKEFLAGS)) \
+  $(findstring --jobserver-fds,$(MAKEFLAGS)) \
+  $(filter -j%,$(MAKEFLAGS))),,-j$(NPROC))
 
 # PROFILE 直接选择完整画像，不再允许架构和开发板自由组合。
 AVAILABLE_PROFILES := $(sort $(basename $(notdir $(wildcard $(PROJECT_ROOT)/mk/platform/*.mk))))
@@ -77,27 +75,33 @@ endif
 ifeq ($(PROFILE_ARCH),riscv)
   DEFAULT_CROSS_COMPILE := riscv64-linux-gnu-
   ARCH_DEFINES := -DRISCV
-  KERNEL_ABI_FLAGS := -march=rv64imac_zicsr_zifencei -mabi=lp64
+  # 内核使用特权 CSR，新版工具链不再由基础 I 隐式启用 Zicsr。
+  KERNEL_ABI_FLAGS := -march=rv64imac_zicsr -mabi=lp64
+  # Linux 交叉 sysroot 只安装 lp64d glibc 头文件。下列宏只让头文件
+  # 选择现有的 stubs-lp64d.h；-mabi=lp64 仍唯一决定内核代码生成 ABI。
+  KERNEL_SYSROOT_HEADER_FLAGS := \
+      -U__riscv_float_abi_soft -D__riscv_float_abi_double
   KERNEL_ARCH_FLAGS := -mcmodel=medany $(KERNEL_ABI_FLAGS) \
-                       -U__riscv_float_abi_soft -D__riscv_float_abi_double
+                       $(KERNEL_SYSROOT_HEADER_FLAGS)
   INITCODE_ABI_FLAGS := -march=rv64imafdc -mabi=lp64d
   INITCODE_ARCH_FLAGS := -mcmodel=medany $(INITCODE_ABI_FLAGS)
-  CONTEXT_ASM_FLAGS := -march=rv64imafdc_zicsr_zifencei -mabi=lp64
+  # 上下文汇编允许保存浮点寄存器，但继续使用内核 soft-float 调用 ABI。
+  CONTEXT_ASM_FLAGS := -march=rv64imafdc_zicsr -mabi=lp64
   KERNEL_ARCH_NAME := rv
-  EA_PLATFORM := -DEA_PROCESSOR_RISCV
 else ifeq ($(PROFILE_ARCH),loongarch)
   DEFAULT_CROSS_COMPILE := loongarch64-linux-gnu-
   ARCH_DEFINES := -DLOONGARCH
   KERNEL_ABI_FLAGS := -march=loongarch64 -mabi=lp64s -mfpu=none
+  # Linux 交叉 sysroot 同样只提供 lp64d glibc 头；头文件选择不改变
+  # -mabi=lp64s -mfpu=none 约束的内核 soft-float 代码生成。
+  KERNEL_SYSROOT_HEADER_FLAGS := \
+      -U__loongarch_soft_float -D__loongarch_double_float
   KERNEL_ARCH_FLAGS := $(KERNEL_ABI_FLAGS) -mcmodel=normal \
-                       -U__loongarch_soft_float -D__loongarch_double_float \
-                       -Wno-error=use-after-free
+                       $(KERNEL_SYSROOT_HEADER_FLAGS)
   INITCODE_ABI_FLAGS := -march=loongarch64 -mabi=lp64d -mfpu=64
-  INITCODE_ARCH_FLAGS := $(INITCODE_ABI_FLAGS) -mcmodel=normal \
-                         -Wno-error=use-after-free
+  INITCODE_ARCH_FLAGS := $(INITCODE_ABI_FLAGS) -mcmodel=normal
   CONTEXT_ASM_FLAGS := -march=loongarch64 -mabi=lp64s -mfpu=64
   KERNEL_ARCH_NAME := la
-  EA_PLATFORM := -DEA_PROCESSOR_LOONGARCH64
 else
   $(error $(PROFILE_FILE) 的 PROFILE_ARCH=$(PROFILE_ARCH) 不受支持)
 endif
@@ -142,18 +146,16 @@ ifeq ($(PERF_DIAG),1)
   CPPFLAGS += -DF7LY_PERF_DIAG=1
 endif
 
-CFLAGS := -Wall -Werror -ffreestanding -O2 -fno-builtin -g \
+CFLAGS := -Wall -Werror -ffreestanding -O2 -g \
           -fno-stack-protector $(KERNEL_ARCH_FLAGS)
 ifeq ($(PERF_DIAG),1)
   CFLAGS += -fno-omit-frame-pointer -fno-optimize-sibling-calls
 endif
-CXXFLAGS := $(CFLAGS) -std=c++23 -nostdlib \
-            -DEA_PLATFORM_LINUX -DEA_PLATFORM_POSIX $(EA_PLATFORM) \
-            -DEA_ENDIAN_LITTLE=1 -Wno-deprecated-declarations \
+CXXFLAGS := $(CFLAGS) -std=c++23 -Wno-deprecated-declarations \
             -Wno-strict-aliasing -fno-exceptions -fno-rtti \
             -Wno-maybe-uninitialized -Wno-volatile \
             -Wno-tautological-compare -Wno-unused-but-set-variable
-LDFLAGS := $(KERNEL_ABI_FLAGS) -static -nostdlib -nostartfiles -nodefaultlibs \
+LDFLAGS := $(KERNEL_ABI_FLAGS) -static -nostdlib \
            -Wl,-z,max-page-size=4096 -Wl,-T,$(PROFILE_LINK_SCRIPT) \
            -Wl,--gc-sections
 

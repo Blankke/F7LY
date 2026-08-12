@@ -10,10 +10,10 @@ endif
 
 # 顶层构建显式传入完整内核 C++ flags，确保 EASTL 与其余内核对象使用
 # 完全相同的 ISA、soft-float ABI 和 freestanding 约束。
-KERNEL_CXXFLAGS ?= -nostdlib
+KERNEL_CXXFLAGS ?= -ffreestanding
 CXXFLAGS := $(KERNEL_CXXFLAGS)
 
-CXXFLAGS += -I include -nostdlib
+CXXFLAGS += -I include
 CXXFLAGS += -I test/packages/EABase/include/Common 
 CXXFLAGS += -I ../../kernel/
 CXXFLAGS += -I ../../kernel/tm/
