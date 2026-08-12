@@ -22,6 +22,9 @@ extern "C" void kernel_thread_wrapper();
 
 namespace net
 {
+    constexpr uint32 k_atomic_flag_clear = 0;
+    constexpr uint32 k_atomic_flag_set = 1;
+
     // Forward declarations
     // ethernet_add 需要一个“启动接收线程”的回调，这里先前向声明。
     static void start_recv_thread_wrapper(void *param);
@@ -30,11 +33,13 @@ namespace net
 
     // Static variables for adapter state
     // adapter_initialized 表示 ONPS 和板级网卡之间的桥已经搭好。
-    static eastl::atomic<bool> adapter_initialized{false};
+    // 使用 32 位状态，确保 RISC-V freestanding 构建不会为 8 位原子 RMW
+    // 生成依赖 libatomic 的 __atomic_*_1 调用。
+    static eastl::atomic<uint32> adapter_initialized{k_atomic_flag_clear};
     // ONPS 里的网络接口对象，具体设备名由板级驱动提供。
     static PST_NETIF onps_netif = nullptr;
     // 接收线程运行标志，cleanup 时通过它让线程退出。
-    static eastl::atomic<bool> recv_thread_running{false};
+    static eastl::atomic<uint32> recv_thread_running{k_atomic_flag_clear};
 
     // 收发路径可能并发执行，不能复用同一块临时帧缓存。
     static uint8 tx_packet_buffer[platform_device::k_max_ethernet_frame];
@@ -46,7 +51,7 @@ namespace net
     bool adapter_init()
     {
         // 适配层也只初始化一次，重复调用直接成功。
-        if (adapter_initialized.load(eastl::memory_order_acquire)) {
+        if (adapter_initialized.load(eastl::memory_order_acquire) != k_atomic_flag_clear) {
             printf("[net_adapter] Already initialized\n");
             return true;
         }
@@ -102,7 +107,7 @@ namespace net
 
         printf("[net_adapter] Successfully registered interface with onps\n");
 
-        adapter_initialized.store(true, eastl::memory_order_release);
+        adapter_initialized.store(k_atomic_flag_set, eastl::memory_order_release);
         return true;
     }
 
@@ -111,7 +116,7 @@ namespace net
     int platform_emac_send(short buf_list_head, unsigned char *error)
     {
         // ONPS 发包时给的是自己的 buf_list 链表，不是连续内存。
-        if (!adapter_initialized.load(eastl::memory_order_acquire)) {
+        if (adapter_initialized.load(eastl::memory_order_acquire) == k_atomic_flag_clear) {
             if (error) *error = 1; // Generic error
             return -1;
         }
@@ -155,9 +160,9 @@ namespace net
             return;
         }
 
-        recv_thread_running.store(true, eastl::memory_order_release);
+        recv_thread_running.store(k_atomic_flag_set, eastl::memory_order_release);
         printf("[net_adapter] Receive thread started\n");
-        while (recv_thread_running.load(eastl::memory_order_acquire)) {
+        while (recv_thread_running.load(eastl::memory_order_acquire) != k_atomic_flag_clear) {
             bool received_any = false;
             for (;;) {
                 // 每轮尽量把设备中已经到达的包全部取完。
@@ -179,7 +184,7 @@ namespace net
                 os_sleep_ms(1);
             }
         }
-        recv_thread_running.store(false, eastl::memory_order_release);
+        recv_thread_running.store(k_atomic_flag_clear, eastl::memory_order_release);
         printf("[net_adapter] Receive thread stopped\n");
     }
 
@@ -195,9 +200,9 @@ namespace net
             return;
         }
         onps_netif = netif;
-        bool expected_stopped = false;
+        uint32 expected_stopped = k_atomic_flag_clear;
         if (!recv_thread_running.compare_exchange_strong(
-                expected_stopped, true, eastl::memory_order_acq_rel)) {
+                expected_stopped, k_atomic_flag_set, eastl::memory_order_acq_rel)) {
             // 防止重复创建接收线程。
             return;
         }
@@ -205,7 +210,7 @@ namespace net
         proc::Pcb *current_proc = proc::k_pm.get_cur_pcb();
         if (current_proc == nullptr) {
             printf("[net_adapter] No current process for receive thread\n");
-            recv_thread_running.store(false, eastl::memory_order_release);
+            recv_thread_running.store(k_atomic_flag_clear, eastl::memory_order_release);
             return;
         }
 
@@ -216,7 +221,7 @@ namespace net
         proc::Pcb *thread_pcb = proc::k_pm.fork(current_proc, flags, 0, 0, false);
         if (thread_pcb == nullptr) {
             printf("[net_adapter] Failed to fork receive thread\n");
-            recv_thread_running.store(false, eastl::memory_order_release);
+            recv_thread_running.store(k_atomic_flag_clear, eastl::memory_order_release);
             return;
         }
 

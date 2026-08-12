@@ -10,6 +10,8 @@ namespace
     // PCI INTx 可能让多个设备共享一个 hwirq。固定四槽覆盖当前块设备和网卡，
     // 同时保持中断路径无堆分配、无链表和确定的遍历上界。
     constexpr uint32 k_handlers_per_source = 4;
+    constexpr uint32 k_atomic_flag_clear = 0;
+    constexpr uint32 k_atomic_flag_set = 1;
 
     struct HandlerSlot
     {
@@ -23,8 +25,10 @@ namespace
     uint64 g_registered_sources;
     uint64 g_unhandled_reported;
     uint8 g_registry_lock;
-    bool g_global_initialized;
-    bool g_invalid_claim_reported;
+    // RISC-V A 扩展不保证 8 位原子 RMW；使用 32 位状态避免 freestanding
+    // 内核生成必须由 libatomic 提供的 __atomic_*_1 调用。
+    uint32 g_global_initialized;
+    uint32 g_invalid_claim_reported;
 
     void lock_registry()
     {
@@ -126,7 +130,7 @@ void initialize_global()
         backend::enable_source(source);
         sources &= sources - 1;
     }
-    __atomic_store_n(&g_global_initialized, true, __ATOMIC_RELEASE);
+    __atomic_store_n(&g_global_initialized, k_atomic_flag_set, __ATOMIC_RELEASE);
     const uint64 registered = g_registered_sources;
     unlock_registry();
 
@@ -152,7 +156,8 @@ void dispatch()
 
     if (pending == 0 && token.controller_token != 0)
     {
-        if (!__atomic_exchange_n(&g_invalid_claim_reported, true, __ATOMIC_ACQ_REL))
+        if (__atomic_exchange_n(&g_invalid_claim_reported, k_atomic_flag_set,
+                                __ATOMIC_ACQ_REL) == k_atomic_flag_clear)
         {
             platformDiagnosticWarn("[irq] controller returned unsupported token=0x%lx\n",
                                    token.controller_token);

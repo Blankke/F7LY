@@ -148,9 +148,12 @@ KERNEL_PRELINK := $(BUILD_DIR)/kernel-perf-prelink
 PERF_SYMBOL_ASM := $(BUILD_DIR)/perf_symbols.S
 PERF_SYMBOL_OBJ := $(BUILD_DIR)/perf_symbols.o
 
+ifeq ($(PERF_DIAG),1)
+$(KERNEL_ELF): scripts/generate_perf_symbols.sh
+endif
+
 $(KERNEL_ELF): $(ENTRY_OBJ) $(KERNEL_OBJS_NO_ENTRY) $(EASTL_LIB) \
-               $(PROFILE_LINK_SCRIPT) $(KERNEL_SOURCE_MANIFEST) \
-               scripts/generate_perf_symbols.sh
+               $(PROFILE_LINK_SCRIPT) $(KERNEL_SOURCE_MANIFEST)
 ifeq ($(PERF_DIAG),1)
 	$(LD) $(LDFLAGS) \
 		-Wl,--defsym,__f7ly_perf_symbols_start=0 \
@@ -168,18 +171,13 @@ else
 endif
 	$(SIZE) $@
 
-KERNEL_FP_GATE_STAMP := $(BUILD_DIR)/kernel-no-fp.stamp
-
 .PHONY: check-kernel-no-fp
-check-kernel-no-fp: $(KERNEL_FP_GATE_STAMP)
-
-$(KERNEL_FP_GATE_STAMP): $(KERNEL_ELF) $(KERNEL_OBJS) $(EASTL_LIB) \
-                         scripts/check_kernel_no_fp.sh
+check-kernel-no-fp: $(KERNEL_ELF) $(KERNEL_OBJS) $(EASTL_LIB) \
+                    scripts/check_kernel_no_fp.sh
 	@scripts/check_kernel_no_fp.sh $(PROFILE_ARCH) $(CROSS_COMPILE) \
 		$(KERNEL_ELF) $(KERNEL_OBJS) $(EASTL_LIB)
-	@touch $@
 
-$(KERNEL_BIN): $(KERNEL_ELF) $(KERNEL_FP_GATE_STAMP)
+$(KERNEL_BIN): $(KERNEL_ELF)
 	$(OBJCOPY) -R .note.gnu.build-id -R .comment -O binary $< $@
 
 export BUILDPATH := $(BUILD_DIR)
