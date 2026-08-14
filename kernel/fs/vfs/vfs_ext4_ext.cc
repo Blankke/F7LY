@@ -136,9 +136,21 @@ public:
         _owner = nullptr;
         _depth = 0;
         ++_serving_ticket;
-        // 读者和写者共用一个通道。唤醒后各自重新检查条件：最多只有下一个
-        // ticket 写者进入，所有没有写者排队的读者可以并行进入。
-        proc::k_pm.wakeup(this);
+        if (_waiting_writers != 0)
+        {
+            // ticket 已经确定唯一可进入的写者，只唤醒该 PCB，避免其余竞争者
+            // 全部变为 RUNNABLE 后发现票号不符又重新睡眠。
+            proc::Pcb *next = _waiters[_serving_ticket % proc::num_process];
+            if (next != nullptr)
+                proc::k_pm.wakeup_one(next, this);
+            else
+                proc::k_pm.wakeup(this); // 损坏/竞态诊断前保留防丢唤醒兜底。
+        }
+        else
+        {
+            // 没有排队写者时，所有等待读者都可并行进入。
+            proc::k_pm.wakeup(this);
+        }
         _state_lock.release();
     }
 
@@ -186,9 +198,13 @@ public:
             panic("ext4 lock: read unlock without reader");
         }
         --_readers;
-        if (_readers == 0)
+        if (_readers == 0 && _waiting_writers != 0)
         {
-            proc::k_pm.wakeup(this);
+            proc::Pcb *next = _waiters[_serving_ticket % proc::num_process];
+            if (next != nullptr)
+                proc::k_pm.wakeup_one(next, this);
+            else
+                proc::k_pm.wakeup(this);
         }
         _state_lock.release();
     }

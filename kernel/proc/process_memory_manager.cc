@@ -19,9 +19,13 @@
 #include "klib.hh"
 #include "printer.hh"
 #include "vm_object.hh"
+#include "file_page_cache.hh"
 #include "hal/arch.hh"
 #include "memlayout.hh"
 #include "mem/kernel_image.hh"
+#ifdef LOONGARCH
+#include "mem/loongarch/page.hh"
+#endif
 #include "fs/vfs/file/normal_file.hh"
 #include "fs/vfs/vfs_utils.hh"
 #include "fs/vfs/virtual_fs.hh"
@@ -42,10 +46,23 @@ namespace proc
         constexpr uint64 k_mmap_min_base = 0x10000000ULL;
         constexpr uint64 k_mmap_guard_gap = 16 * PGSIZE;
         constexpr uint64 k_mmap_upper_guard = 256 * PGSIZE;
+        constexpr uint32 k_user_page_reclaim_batch = 256;
         constexpr uint32 k_file_invalidation_registry_capacity = num_process;
         inline uint32 max_reasonable_file_refcnt()
         {
             return num_process * max_open_files;
+        }
+
+        inline void *try_alloc_user_page()
+        {
+            void *page = mem::PhysicalMemoryManager::try_alloc_page();
+            if (page != nullptr)
+            {
+                return page;
+            }
+
+            file_page_cache::reclaim_clean_pages(k_user_page_reclaim_batch);
+            return mem::PhysicalMemoryManager::try_alloc_page();
         }
 
         struct FileInvalidationMmRegistry
@@ -1335,7 +1352,7 @@ namespace proc
             }
 
             // has_resident_pages 的 false 是“整段没有叶子映射”的强保证。
-            // Rust/LLVM 会保留很大的惰性文件映射与匿名地址区；fork 无需为它们
+            // 用户态分配器会保留很大的惰性文件映射与匿名地址区；fork 无需为它们
             // 逐页 walk，也无需在 LoongArch 子页表中提前建立空层级。
             if (!entry.has_resident_pages)
             {
@@ -1991,17 +2008,35 @@ namespace proc
             return false;
         }
 
-        // LoongArch 的 tlbr refill 入口要求中间层级先存在。
-        // 这里不建立叶子映射，只把后续懒缺页需要的页表骨架补齐。
-        for (uint64 va = range_start; va < range_end; va += PGSIZE)
+        // LoongArch 的 tlbr refill 入口要求最后一级页表页预先存在。同一张末级
+        // 页表覆盖完整的 dir1 区间；每个覆盖区只需 walk 一次即可建立相同骨架，
+        // 避免大块稀疏地址预留对每个 4 KiB 用户页重复四级遍历。
+        constexpr uint64 k_leaf_table_coverage =
+            1ULL << mem::PageEnum::dir1_vpn_shift;
+        uint64 va = range_start;
+        while (va < range_end)
         {
             mem::Pte pte_slot = pagetable.walk(va, true);
             if (pte_slot.is_null())
             {
-                printfRed("ProcessMemoryManager: ensure_user_pagetable_hierarchy failed for va=%p\n",
-                          (void *)va);
+                const uint32 reclaimed =
+                    file_page_cache::reclaim_clean_pages(k_user_page_reclaim_batch);
+                pte_slot = pagetable.walk(va, true);
+                if (pte_slot.is_null())
+                {
+                    printfRed("ProcessMemoryManager: ensure_user_pagetable_hierarchy failed for va=%p reclaimed=%u\n",
+                              (void *)va, reclaimed);
+                    return false;
+                }
+            }
+
+            const uint64 next_leaf_boundary =
+                (va + k_leaf_table_coverage) & ~(k_leaf_table_coverage - 1);
+            if (next_leaf_boundary <= va)
+            {
                 return false;
             }
+            va = next_leaf_boundary;
         }
 #else
         (void)start;
@@ -2285,21 +2320,21 @@ namespace proc
                 return true;
             }
 
-            void *mem = mem::PhysicalMemoryManager::try_alloc_page();
-            if (mem == nullptr)
+            void *page = try_alloc_user_page();
+            if (page == nullptr)
             {
                 return false;
             }
-            mem::k_pmm.clear_page(mem);
 
 #ifdef RISCV
             uint64 flags = PTE_W | PTE_R | PTE_U;
 #elif defined(LOONGARCH)
             uint64 flags = PTE_P | PTE_R | PTE_W | PTE_U | PTE_MAT | PTE_D;
 #endif
-            if (!mem::k_vmm.map_pages(pagetable, page_va, PGSIZE, (uint64)mem, flags))
+            if (!mem::k_vmm.map_pages(pagetable, page_va, PGSIZE,
+                                      reinterpret_cast<uint64>(page), flags))
             {
-                mem::k_pmm.free_page(mem);
+                mem::k_pmm.free_page(page);
                 return false;
             }
             return true;

@@ -10,6 +10,7 @@
 #include "hal/arch.hh"
 #include "printer.hh"
 #include "proc/scheduler.hh"
+#include "tm/platform_clock_backend.hh"
 #include "tm/time.hh"
 #include "trap.hh"
 
@@ -85,6 +86,12 @@ namespace hal::smp
 {
 namespace
 {
+    // 多 vCPU 模拟器可能放大次核启动延迟。启动 IPI 已是 blocking 发送，平台
+    // 画像只需提供与执行环境匹配的有界等待窗口。
+    static_assert(F7LY_SECONDARY_START_TIMEOUT_US > 0);
+    constexpr uint64 k_secondary_start_timeout_us =
+        F7LY_SECONDARY_START_TIMEOUT_US;
+
     [[noreturn]] void run_secondary(uint64 cpu_id)
     {
         Cpu::wait_for_bootstrap_ready();
@@ -191,20 +198,25 @@ void start_secondaries(uint64 boot_argument)
     Cpu::publish_bootstrap_ready();
 
     // 固件没有停驻某个 DTB CPU、mailbox 契约不匹配或次核硬件故障时，不能
-    // 永久阻塞主核。两秒后收缩到已上线 CPU，系统仍可安全以单核方式启动。
-    const uint64 wait_start = rdtime();
-    const uint64 wait_cycles = tmm::clock_frequency_hz() * 2ULL;
+    // 永久阻塞主核。等待窗口内不盲目重发 boot IPI：次核可能已经离开固件、
+    // 只是尚未发布 online，重发 vector 0 会给运行态 IPI 留下无法处理的状态位。
+    const uint64 wait_start = platform::clock_backend::read_ticks();
+    const uint64 wait_cycles =
+        tmm::microseconds_to_cycles(k_secondary_start_timeout_us);
     while (Cpu::online_cpu_mask() != Cpu::possible_cpu_mask())
     {
-        if (rdtime() - wait_start >= wait_cycles)
+        if (platform::clock_backend::read_ticks() - wait_start >= wait_cycles)
         {
             const uint64 missing = Cpu::retain_online_cpus_only();
-            boardPrintfWarn("[smp] secondary startup timeout, disabled mask=0x%lx "
-                            "online=0x%lx\n",
-                            missing, Cpu::online_cpu_mask());
+            k_printer.print_board_diagnostic(
+                "[smp] secondary startup timeout, disabled mask=0x%lx "
+                "online=0x%lx\n",
+                missing, Cpu::online_cpu_mask());
             break;
         }
-        asm volatile("" ::: "memory");
+        // 启动核已经配置周期 timer；释放宿主执行槽，避免主核忙等反过来
+        // 饿死正在完成本地页表/中断初始化的 TCG vCPU。
+        Cpu::idle_until_interrupt();
     }
     boardPrintfInfo("[smp] output: possible=0x%lx online=0x%lx cpus=%d\n",
                     Cpu::possible_cpu_mask(), Cpu::online_cpu_mask(),

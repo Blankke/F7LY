@@ -56,6 +56,15 @@ int ext4_balloc_free_blocks(struct ext4_inode_ref *inode_ref, ext4_fsblk_t first
  * @return  standard error code*/
 int ext4_balloc_alloc_block(struct ext4_inode_ref *inode_ref, ext4_fsblk_t goal, ext4_fsblk_t *baddr);
 
+/**
+ * 在单个 block group 中分配尽可能长的连续区间。
+ * count 既是请求上限也是实际返回数量；成功时至少分配一块。
+ */
+int ext4_balloc_alloc_blocks(struct ext4_inode_ref *inode_ref,
+                            ext4_fsblk_t goal,
+                            ext4_fsblk_t *baddr,
+                            uint32_t *count);
+
 /**@brief   Try allocate selected block.
  * @param   inode_ref inode reference
  * @param   baddr block address to allocate

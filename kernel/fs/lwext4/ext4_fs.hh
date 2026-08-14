@@ -189,6 +189,34 @@ int ext4_fs_indirect_find_goal(struct ext4_inode_ref *inode_ref, ext4_fsblk_t *g
 int ext4_fs_get_inode_dblk_idx(struct ext4_inode_ref *inode_ref, ext4_lblk_t iblock, ext4_fsblk_t *fblock,
                                bool support_unwritten);
 
+/**@brief Resolve one contiguous read run without creating or converting blocks.
+ * @param inode_ref   I-node whose data mapping is queried
+ * @param iblock      First logical block
+ * @param max_blocks  Maximum logical blocks requested, must be non-zero
+ * @param fblock      First physical block, or zero for a hole/unwritten run
+ * @param run_blocks  Number of contiguous logical blocks returned
+ * @return Error code; on success run_blocks is in [1, max_blocks]
+ */
+int ext4_fs_get_inode_dblk_read_run(struct ext4_inode_ref *inode_ref,
+                                   ext4_lblk_t iblock,
+                                   uint32_t max_blocks,
+                                   ext4_fsblk_t *fblock,
+                                   uint32_t *run_blocks);
+
+/**@brief Resolve or initialize one contiguous run for full-block overwrite.
+ * @param inode_ref   I-node whose data mapping is queried
+ * @param iblock      First logical block
+ * @param max_blocks  Maximum logical blocks requested, must be non-zero
+ * @param fblock      First physical block
+ * @param run_blocks  Number of contiguous logical blocks returned
+ * @return Error code; on success run_blocks is in [1, max_blocks]
+ */
+int ext4_fs_get_inode_dblk_write_run(struct ext4_inode_ref *inode_ref,
+                                    ext4_lblk_t iblock,
+                                    uint32_t max_blocks,
+                                    ext4_fsblk_t *fblock,
+                                    uint32_t *run_blocks);
+
 /**@brief Initialize a part of unwritten range of the inode.
  * @param inode_ref I-node to proceed on.
  * @param iblock    Logical index of block
@@ -204,6 +232,13 @@ int ext4_fs_init_inode_dblk_idx(struct ext4_inode_ref *inode_ref, ext4_lblk_t ib
  * @return Error code
  */
 int ext4_fs_append_inode_dblk(struct ext4_inode_ref *inode_ref, ext4_fsblk_t *fblock, ext4_lblk_t *iblock);
+
+/**@brief Append one contiguous run, updating the transient inode size reservation. */
+int ext4_fs_append_inode_dblk_run(struct ext4_inode_ref *inode_ref,
+                                 uint32_t max_blocks,
+                                 ext4_fsblk_t *fblock,
+                                 ext4_lblk_t *iblock,
+                                 uint32_t *run_blocks);
 
 /**@brief   Increment inode link count.
  * @param   inode_ref none handle

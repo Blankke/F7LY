@@ -1,16 +1,21 @@
 #pragma once
 
-// 内核静态分配 8 个 CPU 槽位，运行时再按 DTB/QEMU 实际提供的 hart 上线。
-// 这样同一份内核可用 QEMU_SMP=1/2/4/8 启动，而不会因编译期数组容量不同产生
-// 不可复现的二进制差异。
-#define NCPU          8  // maximum number of CPUs supported by this kernel image
+// CPU 静态容量由平台画像给出，避免架构公共层猜测具体机器拓扑。运行时仍只
+// 上线 DTB 实际声明且完成本地初始化的 CPU。
+#ifndef F7LY_MAX_CPUS
+#error "platform profile must define F7LY_MAX_CPUS"
+#endif
+#if F7LY_MAX_CPUS < 1 || F7LY_MAX_CPUS > 64
+#error "F7LY_MAX_CPUS must fit in the 64-bit CPU mask"
+#endif
+#define NCPU F7LY_MAX_CPUS  // maximum number of CPUs supported by this kernel image
 #define NUMCPU        NCPU
 // 进程池需要覆盖较大的并发进程/线程集合；容量过小会让合法 fork()/clone()
 // 负载过早得到 EAGAIN，破坏用户态按 Linux 语义创建任务的预期。
 #define NPROC       512  // maximum number of processes
-// Cargo/rustc 的并行子进程会同时持有大量源码、metadata、pipe 和目录句柄。
-// per-process fd 表的权威容量已是 proc::fd_table_capacity=1024；这里把旧式
-// VFS 全局对象池同步提升，避免 8 jobs 在内存仍充足时先误报 EMFILE/ENFILE。
+// 并行构建器会同时持有大量源码、元数据、管道和目录句柄。per-process fd 表
+// 的权威容量已是 proc::fd_table_capacity=1024；这里同步旧式 VFS 全局对象池，
+// 避免系统在内存仍充足时过早误报 EMFILE/ENFILE。
 #define NOFILE     1024  // legacy per-process open-file capacity
 #define NFILE      1024  // open files/ext4 handles per system
 #define NINODE     1024  // maximum number of active inodes

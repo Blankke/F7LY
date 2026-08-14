@@ -160,7 +160,7 @@ bool read_posix_timer_clock(const extended_posix_timer &timer, tmm::timespec *cu
   if (is_cpu_clock(clockid))
   {
     // POSIX CPU timer 属于创建它的进程/线程，不能在时钟中断里偷用“当前 PCB”。
-    // RISC-V 评测机 panic 的 no-current-proc 就是这里被异步扫描命中的。
+    // 中断上下文可能没有当前进程，因此异步扫描只能使用 timer 记录的 owner。
     return read_task_cpu_clock(timer.owner, current_time);
   }
   return tmm::k_tm.clock_gettime(clockid, current_time) == 0;
@@ -465,8 +465,7 @@ void check_interval_timers(Pcb *current_proc, bool check_realtime)
     for (uint i = 0; i < num_process; ++i)
     {
       Pcb &candidate = k_proc_pool[i];
-      // BuildStorm 的进程数较多，但通常只有 timeout 监控
-      // 进程持有实时 interval timer。先用原子位过滤，避免
+      // 大进程集合中通常只有少数任务持有实时 interval timer。先用原子位过滤，避免
       // CPU0 每个 tick 对整个 PCB 池逐项取锁。
       if (!candidate._itimer[k_interval_timer_real].armed.load(eastl::memory_order_acquire))
       {

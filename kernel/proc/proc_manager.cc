@@ -74,6 +74,27 @@ namespace proc
         constexpr size_t k_linux_name_max = 255;
         constexpr uint64 k_pie_load_base = 0x10000ULL;
 
+        uint64 linux_elf_hwcap()
+        {
+#ifdef LOONGARCH
+            // Linux LoongArch UAPI: CPUCFG=bit0、UAL=bit2。QEMU 的原生
+            // LoongArch TCG 后端会拒绝在缺少 UAL 的宿主上启动，因此 auxv
+            // 必须反映 CPUCFG1[20]，同时不能向不支持 UAL 的 2K1000 虚报。
+            constexpr uint64 k_hwcap_cpucfg = 1ULL << 0;
+            constexpr uint64 k_hwcap_ual = 1ULL << 2;
+            constexpr uint64 k_cpucfg1_ual = 1ULL << 20;
+            uint64 hwcap = k_hwcap_cpucfg;
+            if ((r_cpucfg(1) & k_cpucfg1_ual) != 0)
+            {
+                hwcap |= k_hwcap_ual;
+            }
+            return hwcap;
+#else
+            // RISC-V 的扩展探测还需与 hwprobe 契约一起实现；在此之前不虚报。
+            return 0;
+#endif
+        }
+
         uint active_slot_bit_index(uint64 value)
         {
             // freestanding 环境不能依赖 libgcc 的 64 位 ctz helper。
@@ -2615,7 +2636,7 @@ namespace proc
         /*
          * 子任务已经以 RUNNABLE 状态发布。若它被初始放置到另一个正处于
          * idle 的 CPU，仅靠周期时钟会让该核最多晚一个 tick 才重新扫描。
-         * Cargo/rustc 会密集创建短生命周期进程和工作线程，逐次延迟会直接
+         * 多进程任务会密集创建短生命周期进程和工作线程，逐次延迟会直接
          * 拉长关键路径；复用现有调度唤醒 IPI，让目标核立即离开 idle。
          */
         if (child_home_cpu >= 0)
@@ -2709,7 +2730,7 @@ namespace proc
         {
             // 继承共享内存附加记录：把父线程 tid 对应的附加项复制到子线程 tid。
             shm::k_smm.duplicate_attachments_for_fork(p->get_tid(), np->get_tid(), np->_pid);
-            // Cargo 会从多线程父进程并发派生 rustc。VMA/PTE 快照必须与
+            // 多线程父进程可能并发派生子进程。VMA/PTE 快照必须与
             // mmap/munmap/mremap/缺页以及另一轮 fork 串行。
             ProcessMemoryManager *cloned_mm = parent_mm->clone_for_fork();
             if (cloned_mm == nullptr)
@@ -3444,7 +3465,7 @@ namespace proc
         /*
          * Linux 默认允许线程组内任意线程等待本线程组其它线程创建的子进程；
          * 只有 __WNOTHREAD 才收窄为“必须是当前线程本人创建的子进程”。
-         * Rust/Cargo 这类多线程运行时会在线程池与子进程管理之间切换，不能把
+         * 多线程运行时会在线程池与子进程管理之间切换，不能把
          * wait 集合硬绑到单个 PCB。
          */
         if ((option & syscall::__WNOTHREAD) != 0)
@@ -4013,7 +4034,7 @@ namespace proc
              * wait4()/waitid() 默认允许线程组内任意线程收割同组线程创建的子进程。
              * 因此退出事件不能只唤醒 child->_parent 指向的创建线程；真正调用 wait
              * 的可能是同组另一线程。所有等待者都睡在各自 PCB 地址上，这里统一唤醒
-             * 父线程组的 child-wait 等待者，避免 cargo 等多线程运行时漏掉 zombie。
+             * 父线程组的 child-wait 等待者，避免多线程运行时漏掉 zombie。
              */
             wakeup_child_waiters(p->_parent);
         }
@@ -5488,14 +5509,14 @@ namespace proc
         // mmap 仅记录 VMA、把叶子页留给后续缺页惰性分配时，如果这里完全不预建页表层级，
         // 首次访问高地址匿名/文件映射时会直接沿着空层级走出诡异的 ADEM。
         // RISC-V 的缺页路径可以按需创建页表层级，避免在 lat_mmap 里为每次映射逐页预建。
-        for (uint64 va = map_addr; va < map_addr + aligned_length; va += PGSIZE)
+        ProcessMemoryManager *const hierarchy_mm = p->get_memory_manager();
+        if (hierarchy_mm == nullptr ||
+            !hierarchy_mm->ensure_user_pagetable_hierarchy(map_addr, aligned_length))
         {
-            mem::Pte pte_slot = p->get_pagetable()->walk(va, true);
-            if (pte_slot.is_null())
-            {
-                printfRed("[mmap] Failed to precreate page-table hierarchy for va=%p\n", (void *)va);
-                return fail_mmap(ENOMEM);
-            }
+            printfRed("[mmap] Failed to precreate page-table hierarchy for range [%p, %p)\n",
+                      (void *)map_addr,
+                      (void *)(map_addr + aligned_length));
+            return fail_mmap(ENOMEM);
         }
 #endif
 
@@ -6163,7 +6184,7 @@ namespace proc
         }
 
         // 统一按路径组件规范化 "." 和 ".."。不能仅凭首字符为 '.' 就裁掉两个
-        // 字节，否则 unlinkat(dirfd, ".cargo-lock", 0) 会误删成 "argo-lock"。
+        // 字节，否则 unlinkat(dirfd, ".hidden", 0) 会误删成 "idden"。
         const eastl::string full_path =
             get_absolute_path(path.c_str(), base_dir.c_str());
 
@@ -6274,9 +6295,9 @@ namespace proc
         }
 
         /*
-         * pipe2 是一个 fd 表原子操作。Cargo jobserver 会在多个线程中创建
-         * 管道并立刻 posix_spawn rustc；若像旧实现那样分别调用两次 alloc_fd，
-         * 子进程可能恰好复制到只有读端或只有写端的半成品表，最终把 jobserver
+         * pipe2 是一个 fd 表原子操作。令牌式调度器可能在多个线程中创建管道
+         * 并立刻派生子进程；若像旧实现那样分别调用两次 alloc_fd，子进程可能
+         * 恰好复制到只有读端或只有写端的半成品表，最终把令牌通道
          * 误判为 EOF。O_CLOEXEC 也必须随两个端点同时可见，不能在安装后补写。
          */
         ofile *fd_table = p->ensure_ofile();
@@ -7480,7 +7501,7 @@ namespace proc
             uint64 *aux = auxv_scratch;
             [[maybe_unused]] int index = 0;
 
-            ADD_AUXV(AT_HWCAP, 0);             // 尚未公布可选 ISA 扩展
+            ADD_AUXV(AT_HWCAP, linux_elf_hwcap());
             ADD_AUXV(AT_HWCAP2, 0);
             ADD_AUXV(AT_PLATFORM, platform_pos);
             // AT_PAGESZ 必须反映内核真实页大小，而不是 ELF 的 p_align / common page size。

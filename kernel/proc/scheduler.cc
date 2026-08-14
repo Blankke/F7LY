@@ -435,8 +435,8 @@ namespace proc
 
     int Scheduler::get_highest_priority(int cpu_id)
     {
-        // Cargo/rustc 的常规任务全部使用默认优先级。先做无锁判断，避免
-        // 8 个 scheduler（尤其是暂时无任务的 CPU）持续争用 _sche_lock。
+        // 默认优先级任务是常见快路径。先做无锁判断，避免多个 scheduler
+        // （尤其是暂时无任务的 CPU）持续争用 _sche_lock。
         if (_non_default_schedulable.load(eastl::memory_order_acquire) == 0)
         {
             return default_proc_prio;

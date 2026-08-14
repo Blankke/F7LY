@@ -211,7 +211,7 @@ namespace proc
          ****************************************************************************************/
         uint64 _kstack = 0;    // 内核栈的虚拟地址
         TrapFrame *_trapframe; // 用户态寄存器保存区，用于系统调用和异常处理, 在usertrapret时映射
-        bool _used_fpu;        // LoongArch 懒 FPU：线程第一次触发浮点禁用异常后才保存/恢复 FPU 现场
+        bool _used_fpu;        // 懒 FPU：线程第一次执行浮点指令后才保存/恢复 FPU 现场
         bool _used_lsx;        // LoongArch 懒 LSX：启用后必须保存完整 128 位向量现场
     private:
         // trap 返回热路径缓存：只有 mm、页表根和 trapframe 物理页三者都

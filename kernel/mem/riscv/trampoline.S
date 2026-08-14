@@ -60,8 +60,14 @@ uservec:
         sd t5, 272(a0)
         sd t6, 280(a0)
 
-        # 内核中的 EASTL 哈希策略也会生成浮点指令，因此用户入口必须先保存
-        # 完整 F/D 现场，之后内核才能安全使用同一组硬件寄存器。
+        # 只有 FS=Dirty 才表示用户自上次恢复后改写了 F/D 现场。Clean 状态
+        # 与 trapframe 中的镜像相同，Off/Initial 也无需保存；这让整数任务和
+        # 只做 syscall 的热路径跳过 32 次浮点存储。
+        csrr t0, sstatus
+        srli t1, t0, 13
+        andi t1, t1, 3
+        li t2, 3
+        bne t1, t2, .Lsave_user_fp_done
         fsd f0, 288(a0)
         fsd f1, 296(a0)
         fsd f2, 304(a0)
@@ -96,6 +102,13 @@ uservec:
         fsd f31, 536(a0)
         frcsr t0
         sd t0, 544(a0)
+.Lsave_user_fp_done:
+        # 内核按 soft-float 构建且通过 no-FP 链接检查。进入 C++ 前关闭 FS，
+        # 防止任何意外内核浮点指令静默污染尚未交还给用户的现场。
+        csrr t0, sstatus
+        li t1, -24577               # ~(3 << 13)
+        and t0, t0, t1
+        csrw sstatus, t0
 
 	# save the user a0 in p->trapframe->a0
         csrr t0, sscratch
@@ -125,11 +138,12 @@ uservec:
 
 .globl userret
 userret:
-        # userret(trapframe_va, pagetable)
+        # userret(trapframe_va, pagetable, used_fpu)
         # switch from kernel to user.
         # usertrapret() calls here.
         # a0: current thread's trapframe VA, in user page table.
         # a1: user page table, for satp.
+        # a2: whether this thread has enabled user FPU state.
 
         # switch to the user page table and its isolated non-zero ASID.
         csrw satp, a1
@@ -139,7 +153,16 @@ userret:
         ld t0, 112(a0)
         csrw sscratch, t0
 
-        # 在覆盖整数临时寄存器之前恢复当前线程的 F/D 现场。
+        # 未使用 FPU 的线程保持 FS=Off；使用过的线程临时启用 FS，恢复保存
+        # 现场后显式标为 Clean。后续只有用户真正执行浮点指令才会变为 Dirty。
+        beqz a2, .Ldisable_user_fp
+        csrr t0, sstatus
+        li t1, -24577               # ~(3 << 13)
+        and t0, t0, t1
+        li t1, 8192                 # FS=Initial
+        or t0, t0, t1
+        csrw sstatus, t0
+
         fld f0, 288(a0)
         fld f1, 296(a0)
         fld f2, 304(a0)
@@ -174,6 +197,20 @@ userret:
         fld f31, 536(a0)
         ld t0, 544(a0)
         fscsr t0
+        csrr t0, sstatus
+        li t1, -24577               # ~(3 << 13)
+        and t0, t0, t1
+        li t1, 16384                # FS=Clean
+        or t0, t0, t1
+        csrw sstatus, t0
+        j .Lrestore_user_fp_done
+
+.Ldisable_user_fp:
+        csrr t0, sstatus
+        li t1, -24577               # ~(3 << 13), FS=Off
+        and t0, t0, t1
+        csrw sstatus, t0
+.Lrestore_user_fp_done:
 
         # restore all but a0 from the current thread's trapframe
         ld ra, 40(a0)

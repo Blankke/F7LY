@@ -306,23 +306,22 @@ namespace proc::file_page_cache
             }
         }
 
-        void maybe_reclaim_low_water(uint64 sampled_free_pages)
+        uint32 reclaim_lru_pages(uint32 max_pages)
         {
-            if (sampled_free_pages > cache_state().low_water_pages)
+            if (max_pages == 0)
             {
-                return;
+                return 0;
             }
 
             CacheEntry *garbage = nullptr;
             uint32 detached = 0;
             for (uint32 index = 0;
-                 index < k_shard_count && detached < k_low_water_reclaim_batch;
+                 index < k_shard_count && detached < max_pages;
                  ++index)
             {
                 PageShard &shard = cache_state().page_shards[index];
                 shard.lock.acquire();
-                while (shard.lru_tail != nullptr &&
-                       detached < k_low_water_reclaim_batch)
+                while (shard.lru_tail != nullptr && detached < max_pages)
                 {
                     detach_entry_locked(shard, shard.lru_tail, garbage);
                     ++detached;
@@ -334,6 +333,16 @@ namespace proc::file_page_cache
                 shard.lock.release();
             }
             release_garbage(garbage, true);
+            return detached;
+        }
+
+        void maybe_reclaim_low_water(uint64 sampled_free_pages)
+        {
+            if (sampled_free_pages > cache_state().low_water_pages)
+            {
+                return;
+            }
+            reclaim_lru_pages(k_low_water_reclaim_batch);
         }
 
         bool range_contains_page(uint64 start_page,
@@ -742,6 +751,12 @@ namespace proc::file_page_cache
         epoch_shard.lock.release();
         // 已安装 PTE 和 FileVmObject/source 各有自己的引用；这里仅归还 cache owner。
         release_garbage(garbage, false);
+    }
+
+    uint32 reclaim_clean_pages(uint32 max_pages)
+    {
+        ensure_budget();
+        return reclaim_lru_pages(max_pages);
     }
 
     void readahead_16_pages(fs::file *file,

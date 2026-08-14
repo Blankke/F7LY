@@ -16,6 +16,8 @@ PROFILE_CPPFLAGS := -DVISIONFIVE2_IPV4=\"$(VISIONFIVE2_IPV4)\" \
 PROFILE_DIR := kernel/platform/riscv/visionfive2
 PROFILE_LINK_SCRIPT := kernel/link/riscv/visionfive2.ld
 PROFILE_KERNEL_SUFFIX := -visionfive2
+PROFILE_MAX_CPUS := 4
+PROFILE_SECONDARY_START_TIMEOUT_US := 2000000
 PROFILE_SRCS := kernel/fs/drivers/riscv/jh7110_dwmmc.cc \
                  kernel/net/drivers/riscv/jh7110_gmac.cc \
                  kernel/platform/common/no_rtc_backend.cc

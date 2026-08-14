@@ -117,7 +117,7 @@ namespace proc
 	// 保持调用前的 PCB 锁状态，供信号、退出和 PCB 回收路径统一摘链。
 	void futex_remove_waiter(Pcb *p);
 	// 由唯一的 timekeeper CPU 在每次 tick 中检查定时 futex；超时等待不再
-	// 挂到全局 ticks channel，避免每个 tick 唤醒所有 rustc/Cargo 等待者。
+	// 挂到全局 ticks channel，避免每个 tick 唤醒所有无期限 futex 等待者。
 	void futex_check_timeouts(uint64 now_cycles);
 	void futex_cleanup_robust_list(struct robust_list_head *head);
 

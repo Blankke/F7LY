@@ -490,7 +490,7 @@ namespace proc
 				 * ensure_user_write_range() 必须临时放开 pipe 锁。多个读者被同一
 				 * 次写入唤醒时，另一个读者可能在这段窗口内抢走全部数据。此时
 				 * write 端仍然打开，read(2) 绝不能返回 0（0 只表示 EOF）；否则
-				 * Cargo jobserver 会把竞争误报成 early EOF，并破坏后续编译调度。
+				 * 令牌式工作调度器会把竞争误报成 early EOF，并破坏后续并发度控制。
 				 */
 				while (_count == 0 && _write_is_open)
 				{

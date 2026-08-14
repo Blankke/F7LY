@@ -85,6 +85,12 @@ namespace proc::file_page_cache
                           uint64 offset,
                           uint64 length);
 
+    /**
+     * 物理页分配失败时主动淘汰最多 max_pages 张 clean 文件缓存页。
+     * 调用方不得持有文件页缓存内部锁；返回实际释放的 cache owner 数量。
+     */
+    uint32 reclaim_clean_pages(uint32 max_pages);
+
     /** 一次 I/O 预读连续 16 张完整页；失败仅放弃预读，不影响当前缺页。 */
     void readahead_16_pages(fs::file *file,
                             const fs::FilePageCacheIdentity &identity,

@@ -16,6 +16,7 @@
 #   PERF_DIAG=1                     构建独立的 *-perf 诊断内核。
 #   SKIP_CAGENT=1                   定向调试时跳过 CAgent，默认保留官方顺序。
 #   HOST_TIMEOUT=15m                 覆盖默认 40 分钟宿主超时。
+#   QEMU_MEM=8G QEMU_SMP=8           覆盖探针客体内存与 CPU 数。
 #   CHECK_E2FSCK=1                   QEMU 结束后对临时镜像执行只读 e2fsck -fn。
 #
 # 输出：
@@ -30,15 +31,15 @@ case "${ARCH_NAME}" in
     riscv)
         MAKE_PROFILE="riscv-qemu"
         MAKE_ALIAS="r"
-        IMAGE_KIND="riscv-preliminary"
-        SOURCE_IMAGE="images/oscomp-preliminary-riscv64.img"
+        IMAGE_KIND="riscv-final"
+        SOURCE_IMAGE="images/oscomp-final-riscv64.img"
         KERNEL_FILENAME="kernel-rv"
         ;;
     loongarch)
         MAKE_PROFILE="loongarch-qemu"
         MAKE_ALIAS="l"
-        IMAGE_KIND="loongarch-preliminary"
-        SOURCE_IMAGE="images/oscomp-preliminary-loongarch64.img"
+        IMAGE_KIND="loongarch-final"
+        SOURCE_IMAGE="images/oscomp-final-loongarch64.img"
         KERNEL_FILENAME="kernel-la"
         ;;
     *)
@@ -74,6 +75,8 @@ else
     HOST_TIMEOUT="${HOST_TIMEOUT:-40m}"
 fi
 SAMPLE_INTERVAL="${SAMPLE_INTERVAL:-30}"
+PROBE_QEMU_MEM="${QEMU_MEM:-8G}"
+PROBE_QEMU_SMP="${QEMU_SMP:-8}"
 
 REQUIRED_TOOLS="awk debugfs grep rg timeout make tr"
 if [[ "${CHECK_E2FSCK:-0}" == "1" ]]; then
@@ -170,7 +173,7 @@ LOG_PATH="logs/run/output_${MAKE_ALIAS}_${TIMESTAMP}_buildstorm-perf.txt"
 HOST_CPU_LOG_PATH="logs/run/output_${MAKE_ALIAS}_${TIMESTAMP}_buildstorm-perf-host-cpu.txt"
 E2FSCK_LOG_PATH="logs/run/output_${MAKE_ALIAS}_${TIMESTAMP}_buildstorm-perf-e2fsck.txt"
 
-echo "[3/4] 启动 8 vCPU/8 GiB QEMU"
+echo "[3/4] 启动 ${PROBE_QEMU_SMP} vCPU/${PROBE_QEMU_MEM} QEMU"
 # 默认每 30 秒记录一次 QEMU 线程的宿主 CPU/落核信息。采样只读 /proc，
 # 开销远低于 guest 编译负载，用于区分“8 个空闲 vCPU 自旋”与 rustc 真并行。
 (
@@ -190,8 +193,8 @@ timeout "${HOST_TIMEOUT}" make qemu-run \
     "PROFILE=${MAKE_PROFILE}" \
     MODE=evaluation \
     "KERNEL_ELF=${KERNEL_PATH}" \
-    QEMU_MEM=8G \
-    QEMU_SMP=8 \
+    "QEMU_MEM=${PROBE_QEMU_MEM}" \
+    "QEMU_SMP=${PROBE_QEMU_SMP}" \
     QEMU_SNAPSHOT= \
     "QEMU_STORAGE_IMAGE=${TEMP_IMAGE}" >"${LOG_PATH}" 2>&1
 RUN_STATUS=$?

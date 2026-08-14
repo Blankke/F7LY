@@ -202,9 +202,9 @@ namespace proc
         }
 
         /*
-         * Rust/LLVM 的分配器会先保留大块 PROT_NONE 区域，再以 4 KiB 粒度
+         * 大地址空间分配器会先保留大块 PROT_NONE 区域，再以 4 KiB 粒度
          * mprotect 为可读写。这里必须像 Linux 一样把权限相同的相邻片段
-         * 重新合并，否则一次 core 编译会制造上万个 VMA。共享、文件和
+         * 重新合并，否则长时间运行会制造上万个 VMA。共享、文件和
          * overlay 映射具有额外的引用/偏移所有权，留给各自后端处理。
          */
         if ((left.flags & MAP_PRIVATE) == 0 || (left.flags & MAP_ANONYMOUS) == 0 ||

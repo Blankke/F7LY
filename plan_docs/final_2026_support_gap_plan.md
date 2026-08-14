@@ -1,6 +1,6 @@
 # 2026 决赛内核能力缺口计划：CAgent / BuildStorm
 
-状态：LoongArch BuildStorm 完整正式构建已通过、CAgent 并发结果行已稳定；重复长测和 Docker harness 双架构 workflow 按用户边界留待外部验收
+状态：双架构 BuildStorm 完整正式冷构建已通过并完成本轮性能收口；Docker harness workflow 按用户边界留待外部验收
 
 日期：2026-07-29
 
@@ -22,6 +22,9 @@
 - [x] 2026-08-09 有界官方进度探针已读取完整结果：最终受控日志 `logs/run/output_r_20260809-073601_buildstorm-perf.txt` 在 8 vCPU、8 GiB、guest 1200 秒内实际输出 `Compiling compiler_builtins` 与 `Compiling core v0.0.0`，产物计数曾达到 27，但未输出后续 `Compiling`，退出 `rc=124`；这证明“仅 Cargo/rustc 存活或产物增长”的证据不足，也明确保留完整 BuildStorm 外部验收门槛。
 - [x] 2026-08-12 LoongArch BuildStorm 崩溃根因修复完成待验收：普通 TLB 表项覆盖相邻双页，原范围失效从 4 KiB 奇数页起步却按 8 KiB 递增，会漏掉区间末端 pair；现统一把半开区间扩张到双页边界，溢出时保守失效全部非全局项。增强专项在旧内核稳定报告 5/10 次预期 fault、修复后 RV/LA 各 50 轮得到 100/100 fault；LA 8 vCPU/8 GiB 正式 BuildStorm 完整输出 `ok=true`，产物 1714568 字节、guest 耗时 1425.69 秒，无 rustc ICE、panic 或 shootdown timeout，证据为 `logs/run/output_l_20260812-104222_buildstorm-perf.txt`。
 - [x] 2026-08-12 CAgent 并发结果误判修复完成待验收：十个后台 agent 的校验实际通过，但 stdout/stderr 原先逐字符获取 UART 锁，会把多个 `testcase cagent ... pass` 行交错成不可解析文本。字符设备新增批量同步写契约，UART 用独立输出事务锁串行化一次 `write()`，同时保留 IRQ 使用原队列锁排空；修复后 LA 连续 5 轮、RV 连续 3 轮均严格得到 10 个唯一项且全部 pass，无 reject、panic 或粘连行。
+- [x] 2026-08-14 评测机超时与 LA 零分问题完成代码修复待验收：LA 不再把 `AT_HWCAP` 固定为 0，而是按 CPUCFG1 发布 UAL，修复内层 QEMU TCG 的 `unaligned access support required` 启动拒绝；LA 静态 CPU 容量升至官方 12 核，次核启动改为最多等待 30 秒并以 `idle` 释放宿主执行槽。RV 用户 trap 改为按 `sstatus.FS` 懒保存 FPU；ext4 连续 extent 读取一次返回完整 run，完整连续写改为 coherent 批量 direct I/O，FIFO 写者只唤醒当前 ticket。四个硬件画像构建通过，RV CAgent 10/10，LA 窄验证得到 `cores=12 online=0-11 AT_HWCAP=5`，RV 8 核/LA 12 核 ext4 并发专项和临时镜像只读 `e2fsck` 均通过；证据为 `logs/run/output_r_20260814-084709_buildstorm-perf.txt`、`logs/run/output_l_20260814-085204_buildstorm-perf.txt`、`logs/run/output_rv_ext4_concurrency_smp8_mem8G_20260814-084810.txt` 与 `logs/run/output_la_ext4_concurrency_smp12_mem8G_20260814-085325.txt`。本地决赛镜像不含内层 `qemu-system-loongarch64`，完整 BuildStorm/Docker 得分仍保留给外部验收，不以窄测冒充通过。
+- [x] 2026-08-14 评测输出二次收口完成待外部验收：新 LA 日志已经越过旧 UAL 拒绝并以 12 核完成编译，剩余零分点明确为编译后内层 QEMU 建立 `loongarch.ram` 时 ENOMEM。LoongArch 用户页表骨架现按每张叶表覆盖的 2 MiB 步进，而非逐 4 KiB 重复四级 walk；页表页分配失败时会先淘汰最多 256 张 clean 文件缓存页并重试。复刻 QEMU `PROT_NONE` 预留、2 MiB 对齐、`MAP_FIXED` 激活、裁边与 128 MiB 实际触页的 16 子进程压力回归通过，日志为 `logs/run/output_la_qemu_mmap_stress_leafspan_20260814.txt`。RV 决赛 rootfs 的 6 分钟冷编译探针从 50 秒启动并行 crate，至 339 秒持续增长到 109 个 deps 产物，无 panic/shootdown timeout，日志为 `logs/run/output_r_20260814-123022_buildstorm-perf.txt`；探针默认镜像已从不含 `/work/tgoskits` 的初赛盘纠正为决赛盘，并支持显式 QEMU 内存/核数。双架构 evaluation 构建、无浮点门禁、ext4 并发专项与临时镜像只读 fsck 均通过；本机受 WSL commit limit 限制未运行 16/36 GiB 完整计分流程。
+- [x] 2026-08-14 本轮完整优化完成待验收：复盘 `22f5813` 以来提交并把调度/锁序、地址空间所有权、平台画像、缓存失效和批量 I/O 方法整理为通用工程不变量；生产注释不再以单一编译器或测例作为设计理由。双架构用户页分配统一增加 clean 文件页回收重试，LA 页表骨架和实际内存激活路径均可在 OOM 时回收；ext4 连续 extent 的查询、批量块分配、direct I/O 和 cache 一致性失效贯通为 run。正式冷构建 RV 8 核 1693.23 秒、1681000 字节，LA 12 核 1367.35 秒、1714568 字节，均 `ok=true`，相对用户评测结果分别缩短 47.5% 和 46.7%；LA 复刻内层 QEMU 内存布局的 16 子进程压力、RV/LA ext4 并发与临时镜像只读 fsck 均通过。证据为 `logs/run/output_{r_20260814-191332,l_20260814-194725}_buildstorm-perf.txt`、`logs/run/output_la_qemu_mmap_stress_reclaim_smp12_20260814.txt` 及 `logs/run/output_{rv,la}_ext4_concurrency_smp8_mem8G_20260814-19*.txt`；开发期 `tools/mmap` 临时测试已删除。
 - [ ] 2026-08-01 外部验收仍开放并由用户执行：完整 BuildStorm 在无其它 QEMU 竞争时串行跑完两轮，恢复 harness 后再跑两轮双架构 workflow；未取得这些长测证据前，不把这些外部项误标为已验收。
 
 - CAgent：F7LY 的基础内核能力已经覆盖较多。动态 ELF/glibc、进程创建与 exec、基础时间、文件创建/读写/目录遍历、socket 和 TCP/UDP 路径都存在，暂时看不到必须重做内核架构的缺口。主要差距是若干 Linux 语义不完整或返回固定值，需要针对 10 个 CAgent 测试逐项验证。
@@ -250,7 +253,7 @@ Starry 的经验说明：F7LY 当前最需要补的是“容量、并发、回�
 - [x] 代码完成待验收：匿名私有 mmap 合并后会重建 Maple Tree 索引，避免扩展尾部无法被后续 `mprotect`/缺页查到。
 - [x] 代码与定向回归完成待验收：`brk` 使用历史堆高水位区分 MAP_FIXED 堆洞与新 mmap；允许 mmapstress03 要求的堆洞重增长，同时禁止越过高水位外的动态库/文件映射。
 - [x] 双架构定向子集完成待长压验收：匿名/文件 mmap、brk/munmap 堆洞、mmapstress03/04/05、SysV SHM 与 COW/TLB 既有专项均通过；完整 BuildStorm 继续覆盖 mprotect/mremap/madvise 组合长压。
-- [ ] 在大内存编译压力下增加或验证干净文件页回收、分配失败重试和 cache 驱逐，防止 rustc 因 page cache 吞噬可用内存而失败。
+- [x] 2026-08-14 完成待验收：用户数据页、页表根/中间页、COW、匿名/私有映射和文件映射源页统一在分配失败时淘汰有界 clean 文件缓存页并重试；LA 的 16 子进程 QEMU 风格 reserve/activate/touch 压力与双架构完整构建通过。
 - [x] 代码审计与专项完成待 BuildStorm 长压验收：动态 VMASpace 承担 Rust 映射主路径，双架构 mmapstress03/04/05、COW 引用计数和跨核 TLB 专项通过；固定 legacy VMA 镜像不作为 256 项映射上限。
 - [ ] 对 1G/4G/8G、单进程/多线程/多进程分别记录峰值内存和失败位置。
 
@@ -284,7 +287,7 @@ Starry 的经验说明：F7LY 当前最需要补的是“容量、并发、回�
 
 ### P2：BuildStorm 性能优化
 
-- [ ] 先取得内核能跑通的成功基线，再拆分 syscall、调度、缺页、文件缓存、ext4 元数据和 block I/O 耗时。
+- [x] 已取得双架构完整冷构建基线，并按 syscall、调度、缺页/回收、文件缓存、ext4 extent/块分配和 block I/O 分层定位；正式结果统一记录真实 guest 时间、CPU 数和产物大小。
 - [x] 代码优化完成待完整构建验收：初始选核退化为 O(NUMCPU) 原子压力读取，调度扫描先锁 PCB 消除跨核竞态，唤醒使用语义化 SMP IPI；路径组件缓存、bcache 热点和 COW/TLB 批处理已做定向回归；epoll 零超时对任意事件上限使用 8 项栈缓冲与轮转扫描、不分配页、不睡眠，ET/LT 公平修复已在 RV/LA `epoll_wait04` 连续 10 次回归中通过。
 - [x] 取舍已执行：未跳过 crate、未复用旧 target、未减少 QEMU 核数，也未修改官方脚本或 uptime。运行期任务迁移仍不启用；2026-08-09 针对 BuildStorm 停顿证据重新加入按 CPU 的 runnable 位图，仅改变调度候选扫描，不改变任务迁移契约，并已通过双架构强制构建和短测。
 - [x] 2026-07-29 冷构建性能基线完成待验收：同一 RV 8G/8 vCPU 镜像从空 `target/debug` 运行 900 guest 秒，旧内核未输出 `Compiling`，仅留下 13 个 deps 文件；宿主采样显示 8 个 vCPU 线程长期合计约 800% CPU，主要消耗在空闲调度扫描。
@@ -300,6 +303,7 @@ Starry 的经验说明：F7LY 当前最需要补的是“容量、并发、回�
 - [x] 2026-08-11 clone 缺页锁生命周期修复完成待长验收：GDB 证实 `CLONE_CHILD_SETTID` 在持有未发布子 PCB 自旋锁时触发 `copy_out -> fault_page -> memory_lock sleep`，导致 scheduler 的 `num_off==1` 不变量失败。现子任务保持 `USED`，`CHILD/PARENT_SETTID` 用户写入在不持子 PCB 锁时完成，再一次性发布 `RUNNABLE`；创建失败回滚也不再带非当前 PCB 锁进入可睡眠资源清理。RV 5 分钟原路径复跑越过 `libc v0.2.186`，继续编译到 `ax-posix-api`，无 panic/assert/kerneltrap；未替代完整 BuildStorm 长验收。
 - [x] 2026-08-11 mm 最后引用并发归还修复完成待长验收：`free_all_memory()` 的本次原子 `fetch_sub` 结果现在唯一决定最终清理与 `delete` 所有权，PCB 在归还前先摘掉 mm 指针，创建失败和 exec 回滚也使用同一契约，消除非最后线程误删正在 teardown 的 mm 及持有者误计泄漏窗口。RV 24 轮×8 线程原始 `SYS_exit` 竞态专项通过，无 panic/引用漂移/最终销毁断言；RV/LA evaluation 构建与无浮点门禁通过，未运行完整 BuildStorm。
 - [x] 2026-08-12 LA 完整 BuildStorm 单轮通过待重复验收：正式路径从 toolchain/minibuild 运行至并行 Cargo 完成，输出文件 1714568 字节，guest 耗时 1425.69 秒；完整日志无 rustc ICE、panic 或 shootdown timeout。原始决赛镜像 `e2fsck -fn` 返回 0；探针临时镜像的 inode 558/560 提示来自 `debugfs unlink + write` 替换两份 runner 的注入副作用，不是 guest 文件系统损坏。
+- [x] 2026-08-14 双架构性能收口完成待外部验收：RV 8 核从 3223.75 秒降至 1693.23 秒，按官方 1616.09 秒 baseline 推算时间项约 114.3/120；LA 12 核从 2564.93 秒降至 1367.35 秒，低于 1985.21 秒 baseline。两轮均从空 target 完整产出，未跳 crate、未伪造时间，日志无内核 panic、OOM 或 TLB 等待超时。
 - [ ] 待完成：在不受其它 QEMU 抢占的环境中让 RV/LA 各取得至少两次完整 BuildStorm 重复数据；当前 RV 用户基线日志和 LA 修复后日志各有一轮完整 PASS，尚不把单轮结果记为双架构重复长测全部验收。
 
 ## 6. 内核能力验收门槛

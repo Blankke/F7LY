@@ -227,7 +227,7 @@ namespace fs
         /*
          * 只要顶层名称属于虚拟树，就保守地走原有逐组件解析。这样 /proc、
          * /sys、/dev 以及 BackingFirst 的 /etc 都不会被 ext4 快路径绕过；
-         * Cargo 常用的 /root、/tmp、/musl、/glibc 则不需要构造整棵路径。
+         * 其余由磁盘承载的顶层路径则不需要构造整棵虚拟目录树。
          */
         const size_t top_level_length = end - begin;
         for (int index = 0; index < root->children_count; ++index)

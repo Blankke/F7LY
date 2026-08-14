@@ -441,9 +441,14 @@ static ext4_fsblk_t ext4_new_meta_blocks(struct ext4_inode_ref *inode_ref, ext4_
 {
     ext4_fsblk_t block = 0;
 
-    *errp = ext4_allocate_single_block(inode_ref, goal, &block);
-    if (count)
-        *count = 1;
+    if (count != nullptr && *count > 1)
+        *errp = ext4_balloc_alloc_blocks(inode_ref, goal, &block, count);
+    else
+    {
+        *errp = ext4_allocate_single_block(inode_ref, goal, &block);
+        if (count)
+            *count = 1;
+    }
     return block;
 }
 

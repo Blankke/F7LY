@@ -59,9 +59,9 @@
 
 /**@brief   Cache size of block device.*/
 #ifndef CONFIG_BLOCK_DEV_CACHE_SIZE
-/* BuildStorm 会并发读取大量源码、crate 元数据和目录块。8192 个 4 KiB
+/* 高扇出元数据负载会并发读取大量小文件、索引和目录块。8192 个 4 KiB
  * 缓存项最多占约 32 MiB 数据页；ext4_buf 描述符由小对象池承载，不再额外
- * 浪费一页/项。相对 1024 项可显著减少依赖解析阶段的缓存抖动。 */
+ * 浪费一页/项。该容量可显著减少工作集略大时的缓存抖动。 */
 #define CONFIG_BLOCK_DEV_CACHE_SIZE 8192
 #endif
 
@@ -88,7 +88,7 @@
 #endif
 
 /**@brief 普通文件允许的最大硬链接数。
- * F7LY 在单核评测环境中显式限制单 inode 的目录项资源，达到上限时返回
+ * F7LY 显式限制单 inode 的目录项资源，达到上限时返回
  * EMLINK；该值仍远高于 POSIX 最低保证，并可由具体构建覆盖。 */
 #ifndef CONFIG_EXT4_REGULAR_FILE_LINK_MAX
 #define CONFIG_EXT4_REGULAR_FILE_LINK_MAX 4096

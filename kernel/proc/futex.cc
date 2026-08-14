@@ -626,9 +626,9 @@ namespace proc
 
             /*
              * 无超时 FUTEX_WAIT 必须只由匹配的 FUTEX_WAKE、信号或线程组退出
-             * 唤醒。旧实现把它挂到全局 tick 通道，导致所有 rustc/Cargo
-             * parking waiter 每 10ms 一起变成 RUNNABLE、重读用户页再睡回去，
-             * 在 8 核下形成持续的惊群。
+             * 唤醒。旧实现把它挂到全局 tick 通道，导致所有无期限 parking
+             * waiter 每个 tick 一起变为 RUNNABLE、重读用户页再睡回去，在多核
+             * 高并发下形成持续惊群。
              *
              * wakeup2() 按完整 futex key 直接定位并唤醒 PCB，因此等待通道只
              * 需要是稳定的非 tick 值；使用 key value 也便于调试时辨认等待对象。

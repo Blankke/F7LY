@@ -83,6 +83,15 @@ static inline uint32 r_csr_cpuid()
     return value;
 }
 
+// CPUCFG 是用户态可见的处理器能力查询指令。内核生成 Linux auxv 时必须
+// 依据真实硬件能力发布 HWCAP，不能把 QEMU 专用能力硬编码到 2K1000 画像。
+static inline uint64 r_cpucfg(uint64 index)
+{
+    uint64 value;
+    asm volatile("cpucfg %0, %1" : "=r"(value) : "r"(index));
+    return value;
+}
+
 static inline uint32 r_csr_crmd()
 {
     uint32 value;

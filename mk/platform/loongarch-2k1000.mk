@@ -16,5 +16,7 @@ PROFILE_CPPFLAGS := -DLS2K1000_IPV4=\"$(LS2K1000_IPV4)\" \
 PROFILE_DIR := kernel/platform/loongarch/2k1000
 PROFILE_LINK_SCRIPT := kernel/link/loongarch/2k1000.ld
 PROFILE_KERNEL_SUFFIX := -2k1000
+PROFILE_MAX_CPUS := 2
+PROFILE_SECONDARY_START_TIMEOUT_US := 2000000
 PROFILE_SRCS := kernel/fs/drivers/loongarch/ls2k1000_ahci.cc \
                  kernel/net/drivers/loongarch/ls2k1000_gmac.cc

@@ -2190,7 +2190,7 @@ static int resolve_symlinks(const eastl::string &input_path, eastl::string &reso
 
         /*
          * 常见 open/stat 路径没有符号链接。旧实现仍会先构造
-         * vector<string> 并为每个组件分配临时字符串，Cargo 深路径会把
+         * vector<string> 并为每个组件分配临时字符串，深路径元数据负载会把
          * 这部分放大成大量页级 kmalloc/free。这里直接在原字符串上扫描
          * 组件；只有实际遇到符号链接时才构造并 normalize 新路径。
          */
@@ -2603,7 +2603,7 @@ static int validate_lookup_prefix_permissions(const eastl::string &absolute_path
         /*
          * ext4_fopen()/ext4_dir_open() 与前面的 resolve_symlinks() 都会完整
          * 遍历路径并验证中间组件类型。root 不需要逐级执行权限位检查；
-         * 旧逻辑却对每个前缀再次 resolve+stat，令深层 Cargo registry 路径
+         * 旧逻辑却对每个前缀再次 resolve+stat，令深层路径
          * 退化成 O(depth²) 次目录遍历。
          */
         return EOK;
@@ -3034,8 +3034,8 @@ int vfs_openat(eastl::string absolute_path, fs::file *&file, uint flags, int mod
             /*
              * 小文件写合并会把数据暂存在写入 fd 内；另一个 open file
              * description 打开同一路径前，必须先让已返回的 write 对它可见。
-             * Cargo 的 E2BIG 回退会保持 @argfile 的写 fd 打开，同时让 rustc
-             * 重新 open 该文件读取参数。放在权限/类型/flag 检查之后，避免
+             * E2BIG 回退常会保持参数文件的写 fd 打开，同时让消费者重新 open
+             * 该文件读取参数。放在权限/类型/flag 检查之后，避免
              * 本应失败的 open 提前触发回写或改变其标准 errno。
              */
             int visibility_ret = proc::k_pm.flush_open_files_for_path(actual_path);

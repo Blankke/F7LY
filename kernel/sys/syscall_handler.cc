@@ -4697,7 +4697,7 @@ namespace syscall
         /*
          * CLONE_VM 的其它线程可以同时撤销或替换 argv/envp 所在的映射。
          * 必须将路径、指针数组和字符串一次性快照在同一 mm 临界区内；否则
-         * 一个被复用后的全零 argv 槽会被误当作末尾 NULL，导致 rustc 只收到
+         * 一个被复用后的全零 argv 槽会被误当作末尾 NULL，导致新程序只收到
          * argv[0]。锁只覆盖用户输入复制，绝不跨越后续 VFS/exec 提交。
          */
         struct MemoryUnlockGuard
@@ -10463,7 +10463,7 @@ namespace syscall
 
             // 引用必须先在共享 fd 表锁内固定。旧实现直接写 fd 槽位并执行
             // f->refcnt++，与同组 close/exec 并发时会丢引用更新，尤其会破坏
-            // Cargo jobserver 管道的 EOF/令牌生命周期。
+            // 令牌管道的 EOF 与所有权生命周期。
             f = proc::k_pm.get_open_file_ref(p, fd);
             if (f == nullptr)
                 return SYS_EBADF;
@@ -10530,7 +10530,7 @@ namespace syscall
             if (p->_ofile == nullptr)
                 return SYS_EBADF;
             // fd 标志和槽位属于同一张共享表；不能在不加锁的情况下读取，
-            // 否则 close/exec/fcntl 并发时可能把 rustc 的 jobserver 标志读成
+            // 否则 close/exec/fcntl 并发时可能把共享描述符标志读成
             // 半更新值。
             p->_ofile->_lock.acquire();
             const int getfd_flags = p->_ofile->_ofile_ptr[fd] != nullptr &&
@@ -11332,7 +11332,7 @@ namespace syscall
         proc::k_scheduler.snapshot_load_averages(sysinfo_.loads);
         // sysinfo 的 totalram/freeram 使用 mem_unit 作为单位。PMM 已经根据
         // DTB 动态布局完成实际可管理页数计算，这里不能继续返回全零占位，
-        // 否则 glibc/Cargo/stress-ng 等程序无法判断 guest 的真实容量。
+        // 否则 libc、构建器和压力工具无法判断 guest 的真实容量。
         sysinfo_.totalram = mem::k_pmm.get_page_count();
         sysinfo_.freeram = mem::k_pmm.get_free_page_count();
         sysinfo_.sharedram = 0;
@@ -11870,9 +11870,9 @@ namespace syscall
             mm->for_each_vma_in_range(addr, aligned_end, [&](proc::vma &vm) -> bool
             {
                 /*
-                 * BuildStorm 中 jemalloc 用 MADV_DONTNEED 归还匿名 arena。
+                 * 用户态分配器使用 MADV_DONTNEED 归还匿名 arena。
                  * 旧实现对所有未知 advice 直接返回成功，却保留原 PTE 和内容，
-                 * jemalloc 探测后只能退化成同步 memset。普通私有匿名映射没有
+                 * 分配器探测后只能退化成同步 memset。普通私有匿名映射没有
                  * VmObject/overlay 所有权，撤销驻留 PTE 后保留 VMA，下一次访问
                  * 会按匿名缺页语义重新得到全零页。
                  *
@@ -13771,8 +13771,8 @@ namespace syscall
         }
 
         // 创建socket文件对象
-        // AF_UNIX SOCK_SEQPACKET 在这里复用已有本地 stream 队列：它对 rustc/posix_spawn
-        // 这类 exec 错误回传通道需要的是可靠、有序、双向的本地 IPC。
+        // AF_UNIX SOCK_SEQPACKET 在这里复用已有本地 stream 队列：exec 错误回传
+        // 通道需要的是可靠、有序、双向的本地 IPC。
         const int internal_type = unix_seqpacket ? SOCK_STREAM : base_type;
         fs::socket_file *socket_f = new fs::socket_file(domain, internal_type, protocol);
         if (!socket_f)
@@ -15466,7 +15466,7 @@ namespace syscall
         proc::vma *vm = mm->find_vma_covering(addr);
         if (vm != nullptr && end_addr <= vm->end_addr())
         {
-            // Rust/jemalloc 会对匿名私有 arena 的完整 VMA 重复提交同一权限。
+            // 用户态分配器会对匿名私有 arena 的完整 VMA 重复提交同一权限。
             // 这类调用不会改变 VMA 元数据，也不会改变任何叶子 PTE 的目标
             // 权限；即使该 VMA 已经有驻留页，页表中的权限仍然来自同一个
             // VMA，重复遍历只会制造 mprotect/页表锁/TLB 的热路径开销。
@@ -15985,8 +15985,8 @@ namespace syscall
         }
         else
         {
-            // mprotect 拆分后的相邻匿名区必须及时回并。Rust/LLVM 会以页粒度
-            // 反复提交预留地址区；缺少这一步时 core 编译可膨胀到上万 VMA。
+            // mprotect 拆分后的相邻匿名区必须及时回并。分配器会以页粒度
+            // 反复提交预留地址区；缺少这一步时长时间运行可膨胀到上万 VMA。
             mm->get_vm_space().coalesce_private_anonymous_range(addr, end_addr);
         }
 

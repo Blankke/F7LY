@@ -33,8 +33,8 @@ extern char trampoline[], uservec[], userret[];
 namespace
 {
   // 单核调度使用固定 tick 时间片，确保长时间运行的用户/内核态任务都能被周期性抢占。
-  // CPU 密集型 rustc worker 通常能独占自己的 home CPU。40ms 时间片把无意义
-  // 的 timer 强制切换降到原来的 1/4，同时仍保留足够的交互和等待唤醒响应。
+  // CPU 密集型 worker 通常能独占自己的 home CPU。40ms 时间片降低无收益的
+  // timer 强制切换，同时仍保留足够的交互与等待唤醒响应。
   constexpr int k_default_time_slice_ticks = 4;
   constexpr uint32 k_riscv_user_asid_count = 1U << 10;
   static_assert(proc::num_process < k_riscv_user_asid_count,
@@ -278,6 +278,13 @@ void trap_manager::usertrap()
     intr_on();
     syscall::k_syscall_handler.invoke_syscaller();
   }
+  else if (cause == 2 && !p->_used_fpu)
+  {
+    // RISC-V 用同一个 illegal-instruction 异常报告 FS=Off 的首次浮点使用。
+    // 先为尚未使用 FPU 的线程启用并原 PC 重试；若指令本身确实非法，第二次
+    // 异常时 _used_fpu 已置位，下面的普通 SIGILL 路径仍会准确终止它。
+    p->_used_fpu = true;
+  }
   else if ((which_dev = devintr()) != 0)
   {
     // ok
@@ -511,9 +518,9 @@ void trap_manager::usertrapret()
   uint64 x = r_sstatus();
   x &= ~SSTATUS_SPP;
   x |= SSTATUS_SPIE;
-  // 用户和内核都会使用 FPU；保持 FS=Dirty，下一次 uservec 先保存用户现场，
-  // 返回前再恢复，隔离不同任务以及内核自身的浮点寄存器使用。
-  x |= 0x3ULL << 13;
+  // 内核按 soft-float 构建。userret 只会为确实使用过 FPU 的线程临时启用
+  // FS 并恢复现场；其它线程保持 Off，避免每次 syscall 都搬运 32 个 FPR。
+  x &= ~(0x3ULL << 13);
   w_sstatus(x);
   w_sepc(p->_trapframe->epc);
 
@@ -535,7 +542,8 @@ void trap_manager::usertrapret()
   //   printf("trapframe->epc: %p\n", p->_trapframe->epc);
   //   printf("[usertrapret] trapframe->a0: %p\n", p->_trapframe->a0);
 
-  ((void (*)(uint64, uint64))fn)(user_trapframe_va, satp);
+  ((void (*)(uint64, uint64, uint64))fn)(
+      user_trapframe_va, satp, p->_used_fpu ? 1 : 0);
 }
 
 /**

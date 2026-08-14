@@ -566,6 +566,181 @@ success:
     return r;
 }
 
+namespace
+{
+uint32_t ext4_balloc_find_free_run(uint8_t *bitmap,
+                                   uint32_t begin,
+                                   uint32_t end,
+                                   uint32_t requested,
+                                   uint32_t *run_start)
+{
+    uint32_t best_start = 0;
+    uint32_t best_length = 0;
+    uint32_t index = begin;
+    while (index < end)
+    {
+        if (!ext4_bmap_is_bit_clr(bitmap, index))
+        {
+            ++index;
+            continue;
+        }
+
+        const uint32_t candidate_start = index;
+        uint32_t candidate_length = 0;
+        while (index < end && candidate_length < requested &&
+               ext4_bmap_is_bit_clr(bitmap, index))
+        {
+            ++candidate_length;
+            ++index;
+        }
+        if (candidate_length > best_length)
+        {
+            best_start = candidate_start;
+            best_length = candidate_length;
+            if (best_length == requested)
+                break;
+        }
+    }
+
+    if (best_length != 0)
+        *run_start = best_start;
+    return best_length;
+}
+}
+
+int ext4_balloc_alloc_blocks(struct ext4_inode_ref *inode_ref,
+                            ext4_fsblk_t goal,
+                            ext4_fsblk_t *baddr,
+                            uint32_t *count)
+{
+    if (inode_ref == nullptr || baddr == nullptr || count == nullptr || *count == 0)
+        return EINVAL;
+
+    struct ext4_fs *fs = inode_ref->fs;
+    struct ext4_sblock *sb = &fs->sb;
+    const uint32_t requested = *count;
+    const uint32_t group_count = ext4_block_group_cnt(sb);
+    if (group_count == 0)
+        return ENOSPC;
+
+    const uint32_t goal_group = ext4_balloc_get_bgid_of_block(sb, goal) % group_count;
+    for (uint32_t attempt = 0; attempt < group_count; ++attempt)
+    {
+        const uint32_t group_id = (goal_group + attempt) % group_count;
+        struct ext4_block_group_ref bg_ref;
+        int rc = ext4_fs_get_block_group_ref(fs, group_id, &bg_ref);
+        if (rc != EOK)
+            return rc;
+
+        struct ext4_bgroup *bg = bg_ref.block_group;
+        const uint32_t group_free = ext4_bg_get_free_blocks_count(bg, sb);
+        if (group_free == 0)
+        {
+            rc = ext4_fs_put_block_group_ref(&bg_ref);
+            if (rc != EOK)
+                return rc;
+            continue;
+        }
+
+        struct ext4_block bitmap_block;
+        const ext4_fsblk_t bitmap_lba = ext4_bg_get_block_bitmap(bg, sb);
+        rc = ext4_trans_block_get(fs->bdev, &bitmap_block, bitmap_lba);
+        if (rc != EOK)
+        {
+            ext4_fs_put_block_group_ref(&bg_ref);
+            return rc;
+        }
+        if (!ext4_balloc_verify_bitmap_csum(sb, bg, bitmap_block.data))
+        {
+            ext4_dbg(DEBUG_BALLOC,
+                     DBG_WARN "Bitmap checksum failed. Group: %" PRIu32 "\n",
+                     bg_ref.index);
+        }
+
+        const ext4_fsblk_t first_block = ext4_balloc_get_block_of_bgid(sb, group_id);
+        const uint32_t first_index = ext4_fs_addr_to_idx_bg(sb, first_block);
+        const uint32_t group_blocks = ext4_blocks_in_group_cnt(sb, group_id);
+        uint32_t scan_start = first_index;
+        if (attempt == 0)
+        {
+            const uint32_t goal_index = ext4_fs_addr_to_idx_bg(sb, goal);
+            if (goal_index >= first_index && goal_index < group_blocks)
+                scan_start = goal_index;
+        }
+
+        uint32_t run_start = 0;
+        uint32_t run_length = ext4_balloc_find_free_run(
+            bitmap_block.data, scan_start, group_blocks, requested, &run_start);
+        if (run_length < requested && scan_start > first_index)
+        {
+            uint32_t wrapped_start = 0;
+            const uint32_t wrapped_length = ext4_balloc_find_free_run(
+                bitmap_block.data, first_index, scan_start, requested, &wrapped_start);
+            if (wrapped_length > run_length)
+            {
+                run_start = wrapped_start;
+                run_length = wrapped_length;
+            }
+        }
+
+        if (run_length == 0)
+        {
+            rc = ext4_block_set(fs->bdev, &bitmap_block);
+            const int put_rc = ext4_fs_put_block_group_ref(&bg_ref);
+            if (rc != EOK)
+                return rc;
+            if (put_rc != EOK)
+                return put_rc;
+            continue;
+        }
+        if (run_length > group_free)
+        {
+            ext4_block_set(fs->bdev, &bitmap_block);
+            ext4_fs_put_block_group_ref(&bg_ref);
+            return EIO;
+        }
+        const uint64_t super_free = ext4_sb_get_free_blocks_cnt(sb);
+        if (super_free < run_length)
+        {
+            ext4_block_set(fs->bdev, &bitmap_block);
+            ext4_fs_put_block_group_ref(&bg_ref);
+            return EIO;
+        }
+
+        for (uint32_t offset = 0; offset < run_length; ++offset)
+            ext4_bmap_bit_set(bitmap_block.data, run_start + offset);
+        ext4_balloc_set_bitmap_csum(sb, bg, bitmap_block.data);
+        ext4_trans_set_block_dirty(bitmap_block.buf);
+        rc = ext4_block_set(fs->bdev, &bitmap_block);
+        if (rc != EOK)
+        {
+            ext4_fs_put_block_group_ref(&bg_ref);
+            return rc;
+        }
+
+        ext4_sb_set_free_blocks_cnt(sb, super_free - run_length);
+
+        const uint32_t block_size = ext4_sb_get_block_size(sb);
+        uint64_t inode_blocks = ext4_inode_get_blocks_count(sb, inode_ref->inode);
+        inode_blocks += static_cast<uint64_t>(run_length) *
+                        (block_size / EXT4_INODE_BLOCK_SIZE);
+        ext4_inode_set_blocks_count(sb, inode_ref->inode, inode_blocks);
+        inode_ref->dirty = true;
+
+        ext4_bg_set_free_blocks_count(bg, sb, group_free - run_length);
+        bg_ref.dirty = true;
+        rc = ext4_fs_put_block_group_ref(&bg_ref);
+        if (rc != EOK)
+            return rc;
+
+        *baddr = ext4_fs_bg_idx_to_addr(sb, run_start, group_id);
+        *count = run_length;
+        return EOK;
+    }
+
+    return ENOSPC;
+}
+
 int ext4_balloc_try_alloc_block(struct ext4_inode_ref *inode_ref, ext4_fsblk_t baddr, bool *free) {
     int rc;
     uint32_t block_size;

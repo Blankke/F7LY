@@ -186,6 +186,15 @@ int ext4_blocks_get_direct(struct ext4_blockdev *bdev, void *buf, uint64_t lba, 
 int ext4_blocks_set_direct(struct ext4_blockdev *bdev, const void *buf, uint64_t lba, uint32_t cnt);
 
 /**
+ * 在调用方持有文件系统排他锁时完整覆盖一段连续逻辑块。
+ * 先写回并失效旧缓存，再使用批量 direct I/O，避免旧 dirty buffer 随后覆盖新数据。
+ */
+int ext4_blocks_set_direct_coherent(struct ext4_blockdev *bdev,
+                                   const void *buf,
+                                   uint64_t lba,
+                                   uint32_t cnt);
+
+/**
  * 将完整覆盖的数据块写入 bcache 并标记为 dirty。
  *
  * 调用方必须在同一高层操作内配对关闭 write-back；计数归零时会在释放
