@@ -1,0 +1,184 @@
+<mxfile host="Electron">
+  <diagram id="f7ly-build-architecture" name="构建系统架构">
+    <mxGraphModel dx="1928" dy="1138" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="940" background="#ffffff" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="contract-zone" parent="1" style="swimlane;startSize=34;rounded=1;whiteSpace=wrap;html=1;opacity=88;dashed=1;dashPattern=8 8;sketch=1;curveFitting=1;jiggle=2;fontFamily=Comic Sans MS;fontSize=16;fontStyle=1;fillColor=#e1d5e7;strokeColor=#9673a6;container=1;pointerEvents=0;" value="① 板级配置 · Makefile + mk/config.mk" vertex="1">
+          <mxGeometry height="215" width="1540" x="30" y="100" as="geometry" />
+        </mxCell>
+        <mxCell id="make-entry" parent="contract-zone" style="rounded=1;whiteSpace=wrap;html=1;fontFamily=Comic Sans MS;fontSize=16;fillColor=#f8cecc;strokeColor=#b85450;strokeWidth=2;shadow=1;sketch=1;curveFitting=1;jiggle=2;" value="&lt;font style=&quot;font-size: 24px;&quot;&gt;⌨&lt;/font&gt;&#xa;&lt;b&gt;make build&lt;/b&gt;&#xa;PROFILE · MODE · PERF_DIAG" vertex="1">
+          <mxGeometry height="105" width="245" x="35" y="62" as="geometry" />
+        </mxCell>
+        <mxCell id="profile-zone" parent="contract-zone" style="swimlane;startSize=32;rounded=1;whiteSpace=wrap;html=1;opacity=92;sketch=1;curveFitting=1;jiggle=2;fontFamily=Comic Sans MS;fontSize=17;fontStyle=1;fillColor=#dae8fc;strokeColor=#6c8ebf;strokeWidth=2;container=1;pointerEvents=0;" value="PROFILE：唯一组合根" vertex="1">
+          <mxGeometry height="150" width="1145" x="355" y="40" as="geometry" />
+        </mxCell>
+        <mxCell id="profile-rv-qemu" parent="profile-zone" style="shape=card;whiteSpace=wrap;html=1;fontFamily=Comic Sans MS;fontSize=15;fillColor=#dae8fc;strokeColor=#6c8ebf;shadow=1;" value="◆ RISC-V&#xa;&lt;b&gt;QEMU virt&lt;/b&gt;" vertex="1">
+          <mxGeometry height="66" width="205" x="25" y="48" as="geometry" />
+        </mxCell>
+        <mxCell id="profile-rv-vf2" parent="profile-zone" style="shape=card;whiteSpace=wrap;html=1;fontFamily=Comic Sans MS;fontSize=15;fillColor=#d5e8d4;strokeColor=#82b366;shadow=1;" value="◆ RISC-V&#xa;&lt;b&gt;VisionFive 2&lt;/b&gt;" vertex="1">
+          <mxGeometry height="66" width="205" x="250" y="48" as="geometry" />
+        </mxCell>
+        <mxCell id="profile-la-qemu" parent="profile-zone" style="shape=card;whiteSpace=wrap;html=1;fontFamily=Comic Sans MS;fontSize=15;fillColor=#ffe6cc;strokeColor=#d79b00;shadow=1;" value="◆ LoongArch&#xa;&lt;b&gt;QEMU virt&lt;/b&gt;" vertex="1">
+          <mxGeometry height="66" width="205" x="475" y="48" as="geometry" />
+        </mxCell>
+        <mxCell id="profile-la-2k" parent="profile-zone" style="shape=card;whiteSpace=wrap;html=1;fontFamily=Comic Sans MS;fontSize=15;fillColor=#f8cecc;strokeColor=#b85450;shadow=1;" value="◆ LoongArch&#xa;&lt;b&gt;2K1000LA&lt;/b&gt;" vertex="1">
+          <mxGeometry height="66" width="205" x="700" y="48" as="geometry" />
+        </mxCell>
+        <mxCell id="profile-contract" parent="profile-zone" style="rounded=1;whiteSpace=wrap;html=1;fontFamily=Comic Sans MS;fontSize=13;fillColor=#fff2cc;strokeColor=#d6b656;shadow=1;" value="🔧 工具链　🧩 平台源码 / 驱动　🔗 链接脚本　📁 产物命名" vertex="1">
+          <mxGeometry height="66" width="195" x="925" y="48" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-make-profile" edge="1" parent="contract-zone" source="make-entry" style="shape=flexArrow;endArrow=classic;html=1;rounded=0;sketch=1;curveFitting=1;jiggle=2;fillColor=#9673a6;strokeColor=#9673a6;" target="profile-zone" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="build-zone" parent="1" style="swimlane;startSize=34;rounded=1;whiteSpace=wrap;html=1;opacity=88;dashed=1;dashPattern=8 8;sketch=1;curveFitting=1;jiggle=2;fontFamily=Comic Sans MS;fontSize=16;fontStyle=1;fillColor=#dae8fc;strokeColor=#6c8ebf;container=1;pointerEvents=0;" value="② 正向组合 · mk/initcode.mk + mk/kernel.mk" vertex="1">
+          <mxGeometry height="360" width="1540" x="30" y="345" as="geometry" />
+        </mxCell>
+        <mxCell id="common-kernel" parent="build-zone" style="shape=folder;whiteSpace=wrap;html=1;fontFamily=Comic Sans MS;fontSize=15;fillColor=#d5e8d4;strokeColor=#82b366;shadow=1;sketch=1;curveFitting=1;jiggle=2;" value="&lt;div&gt;&lt;br&gt;&lt;/div&gt;📚　通用内核" vertex="1">
+          <mxGeometry height="60" width="205" x="35" y="130" as="geometry" />
+        </mxCell>
+        <mxCell id="selected-platform" parent="build-zone" style="rounded=1;whiteSpace=wrap;html=1;fontFamily=Comic Sans MS;fontSize=15;fillColor=#ffe6cc;strokeColor=#d79b00;shadow=1;sketch=1;curveFitting=1;jiggle=2;" value="🧩　当前画像实现" vertex="1">
+          <mxGeometry height="55" width="205" x="35" y="65" as="geometry" />
+        </mxCell>
+        <mxCell id="initcode" parent="build-zone" style="shape=document;whiteSpace=wrap;html=1;fontFamily=Comic Sans MS;fontSize=15;fillColor=#e1d5e7;strokeColor=#9673a6;shadow=1;sketch=1;curveFitting=1;jiggle=2;size=0.14545454545454545;" value="📄　initcode" vertex="1">
+          <mxGeometry height="55" width="205" x="35" y="198" as="geometry" />
+        </mxCell>
+        <mxCell id="eastl" parent="build-zone" style="shape=folder;whiteSpace=wrap;html=1;fontFamily=Comic Sans MS;fontSize=15;fillColor=#f8cecc;strokeColor=#b85450;shadow=1;sketch=1;curveFitting=1;jiggle=2;" value="&lt;div&gt;&lt;br&gt;&lt;/div&gt;📦　EASTL" vertex="1">
+          <mxGeometry height="55" width="205" x="35" y="266" as="geometry" />
+        </mxCell>
+        <mxCell id="workspace" parent="build-zone" style="swimlane;startSize=34;rounded=1;whiteSpace=wrap;html=1;opacity=94;sketch=1;curveFitting=1;jiggle=2;fontFamily=Comic Sans MS;fontSize=16;fontStyle=1;fillColor=#fff2cc;strokeColor=#d6b656;strokeWidth=2;container=1;pointerEvents=0;" value="📁 build/{PROFILE}[-shell][-perf]/" vertex="1">
+          <mxGeometry height="275" width="535" x="315" y="55" as="geometry" />
+        </mxCell>
+        <mxCell id="compile" parent="workspace" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fontFamily=Comic Sans MS;fontSize=16;fillColor=#dae8fc;strokeColor=#6c8ebf;strokeWidth=3;shadow=1;sketch=1;curveFitting=1;jiggle=2;" value="&lt;font style=&quot;font-size: 27px;&quot;&gt;⚙&lt;/font&gt;&#xa;&lt;b&gt;编译&lt;/b&gt;" vertex="1">
+          <mxGeometry height="115" width="115" x="35" y="65" as="geometry" />
+        </mxCell>
+        <mxCell id="objects" parent="workspace" style="shape=dataStorage;whiteSpace=wrap;html=1;fontFamily=Lucida Console;fontSize=14;fillColor=#f5f5f5;strokeColor=#666666;shadow=1;" value=".o&#xa;.d&#xa;…" vertex="1">
+          <mxGeometry height="100" width="85" x="215" y="72" as="geometry" />
+        </mxCell>
+        <mxCell id="link" parent="workspace" style="shape=hexagon;perimeter=hexagonPerimeter2;whiteSpace=wrap;html=1;fontFamily=Comic Sans MS;fontSize=16;fillColor=#ffe6cc;strokeColor=#d79b00;strokeWidth=2;shadow=1;sketch=1;curveFitting=1;jiggle=2;" value="🔗&#xa;&lt;b&gt;链接&lt;/b&gt;" vertex="1">
+          <mxGeometry height="100" width="135" x="360" y="72" as="geometry" />
+        </mxCell>
+        <mxCell id="config-stamp" parent="workspace" style="shape=note;whiteSpace=wrap;html=1;fontFamily=Comic Sans MS;fontSize=12;fillColor=#e1d5e7;strokeColor=#9673a6;shadow=1;" value="🧾 build-config.stamp" vertex="1">
+          <mxGeometry height="45" width="205" x="35" y="205" as="geometry" />
+        </mxCell>
+        <mxCell id="source-manifest" parent="workspace" style="shape=note;whiteSpace=wrap;html=1;fontFamily=Comic Sans MS;fontSize=12;fillColor=#d5e8d4;strokeColor=#82b366;shadow=1;" value="📜 kernel-sources.list" vertex="1">
+          <mxGeometry height="45" width="210" x="285" y="205" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-compile-objects" edge="1" parent="workspace" source="compile" style="shape=flexArrow;endArrow=classic;html=1;rounded=0;fillColor=#6c8ebf;strokeColor=#6c8ebf;sketch=1;curveFitting=1;jiggle=2;" target="objects" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-objects-link" edge="1" parent="workspace" source="objects" style="shape=flexArrow;endArrow=classic;html=1;rounded=0;fillColor=#d79b00;strokeColor=#d79b00;sketch=1;curveFitting=1;jiggle=2;" target="link" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-config-compile" edge="1" parent="workspace" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=classic;strokeColor=#9673a6;fontFamily=Comic Sans MS;fontSize=11;exitX=0.5;exitY=0;entryX=0.35;entryY=1;" value="参数变化 → 重编">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="140" y="190" />
+              <mxPoint x="78" y="190" />
+            </Array>
+            <mxPoint x="139.5" y="205" as="sourcePoint" />
+            <mxPoint x="78.19757471107073" y="177.64055612431957" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge-manifest-link" edge="1" parent="workspace" source="source-manifest" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=classic;strokeColor=#82b366;fontFamily=Comic Sans MS;fontSize=11;exitX=0.5;exitY=0;entryX=0.5;entryY=1;" target="link" value="集合变化 → 重链">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-common-compile" edge="1" parent="build-zone" source="common-kernel" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=classic;strokeColor=#82b366;sketch=1;curveFitting=1;jiggle=2;exitX=1;exitY=0.5;entryX=0;entryY=0.2;entryDx=0;entryDy=0;" target="compile" value="">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="295" y="171" />
+              <mxPoint x="295" y="155" />
+              <mxPoint x="358" y="155" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge-platform-compile" edge="1" parent="build-zone" source="selected-platform" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=classic;strokeColor=#d79b00;sketch=1;curveFitting=1;jiggle=2;exitX=1;exitY=0.5;entryX=0;entryY=0;entryDx=0;entryDy=0;" target="compile" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-initcode-compile" edge="1" parent="build-zone" source="initcode" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=classic;strokeColor=#9673a6;sketch=1;curveFitting=1;jiggle=2;exitX=1;exitY=0.5;entryX=0;entryY=0.6;entryDx=0;entryDy=0;" target="compile" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-eastl-compile" edge="1" parent="build-zone" source="eastl" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=classic;strokeColor=#b85450;sketch=1;curveFitting=1;jiggle=2;exitX=1;exitY=0.5;entryX=0;entryY=0.8;entryDx=0;entryDy=0;" target="compile" value="">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="330" y="293" />
+              <mxPoint x="330" y="207" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="artifact-zone" parent="build-zone" style="swimlane;startSize=32;rounded=1;whiteSpace=wrap;html=1;opacity=94;sketch=1;curveFitting=1;jiggle=2;fontFamily=Comic Sans MS;fontSize=16;fontStyle=1;fillColor=#d5e8d4;strokeColor=#82b366;strokeWidth=2;container=1;pointerEvents=0;" value="内核产物" vertex="1">
+          <mxGeometry height="165" width="300" x="915" y="62" as="geometry" />
+        </mxCell>
+        <mxCell id="kernel-elf" parent="artifact-zone" style="shape=document;whiteSpace=wrap;html=1;fontFamily=Lucida Console;fontSize=16;fontStyle=1;fillColor=#dae8fc;strokeColor=#6c8ebf;shadow=1;" value="ELF" vertex="1">
+          <mxGeometry height="80" width="95" x="25" y="52" as="geometry" />
+        </mxCell>
+        <mxCell id="kernel-bin" parent="artifact-zone" style="shape=cube;whiteSpace=wrap;html=1;fontFamily=Lucida Console;fontSize=16;fontStyle=1;fillColor=#ffe6cc;strokeColor=#d79b00;shadow=1;" value="BIN" vertex="1">
+          <mxGeometry height="75" width="80" x="190" y="55" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-elf-bin" edge="1" parent="artifact-zone" source="kernel-elf" style="shape=flexArrow;endArrow=classic;html=1;rounded=0;fillColor=#82b366;strokeColor=#82b366;fontFamily=Comic Sans MS;fontSize=11;" target="kernel-bin" value="objcopy">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-link-artifact" edge="1" parent="build-zone" source="link" style="shape=flexArrow;endArrow=classic;html=1;rounded=0;fillColor=#82b366;strokeColor=#82b366;sketch=1;curveFitting=1;jiggle=2;" target="kernel-elf" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="no-fp-check" parent="build-zone" style="shape=hexagon;perimeter=hexagonPerimeter2;whiteSpace=wrap;html=1;fontFamily=Comic Sans MS;fontSize=14;fillColor=#d5e8d4;strokeColor=#82b366;strokeWidth=2;shadow=1;sketch=1;curveFitting=1;jiggle=2;" value="✓　check-kernel-no-fp" vertex="1">
+          <mxGeometry height="70" width="245" x="1290" y="86" as="geometry" />
+        </mxCell>
+        <mxCell id="perf-plugin" parent="build-zone" style="rounded=1;whiteSpace=wrap;html=1;fontFamily=Comic Sans MS;fontSize=13;fillColor=#e1d5e7;strokeColor=#9673a6;dashed=1;dashPattern=8 8;shadow=1;sketch=1;curveFitting=1;jiggle=2;" value="mk/perf.mk&#xa;&lt;b&gt;PERF_DIAG=1&lt;/b&gt;&#xa;两阶段符号链接" vertex="1">
+          <mxGeometry height="88" width="245" x="1255" y="210" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-artifact-check" edge="1" parent="build-zone" source="artifact-zone" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=classic;dashed=1;strokeColor=#82b366;fontFamily=Comic Sans MS;fontSize=11;exitX=1;exitY=0.35;entryX=0;entryY=0.5;" target="no-fp-check" value="显式检查">
+          <mxGeometry relative="1" x="-0.0049" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge-perf-link" edge="1" parent="build-zone" source="perf-plugin" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=classic;dashed=1;strokeColor=#9673a6;fontFamily=Comic Sans MS;fontSize=11;exitX=0;exitY=0.5;entryX=0.852;entryY=0.845;entryDx=0;entryDy=0;entryPerimeter=0;" target="link" value="可选">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="890" y="254" />
+              <mxPoint x="890" y="212" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge-profile-selected" edge="1" parent="1" source="profile-zone" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=classic;strokeColor=#9673a6;strokeWidth=2;fontFamily=Comic Sans MS;fontSize=12;sketch=1;curveFitting=1;jiggle=2;exitX=0.5;exitY=1;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="selected-platform" value="配置注入">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="958" y="330" />
+              <mxPoint x="168" y="330" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="separation-zone" parent="1" style="swimlane;startSize=34;rounded=1;whiteSpace=wrap;html=1;opacity=88;dashed=1;dashPattern=8 8;sketch=1;curveFitting=1;jiggle=2;fontFamily=Comic Sans MS;fontSize=16;fontStyle=1;fillColor=#fff2cc;strokeColor=#d6b656;container=1;pointerEvents=0;" value="③ 构建 / 运行解耦 · mk/qemu.mk" vertex="1">
+          <mxGeometry height="175" width="1540" x="30" y="735" as="geometry" />
+        </mxCell>
+        <mxCell id="pure-build" parent="separation-zone" style="rounded=1;whiteSpace=wrap;html=1;fontFamily=Comic Sans MS;fontSize=16;fillColor=#d5e8d4;strokeColor=#82b366;strokeWidth=2;shadow=1;sketch=1;curveFitting=1;jiggle=2;" value="&lt;font style=&quot;font-size: 23px;&quot;&gt;🔒&lt;/font&gt;　&lt;b&gt;build / all&lt;/b&gt;&#xa;只生成产物" vertex="1">
+          <mxGeometry height="88" width="275" x="50" y="52" as="geometry" />
+        </mxCell>
+        <mxCell id="image-isolated" parent="separation-zone" style="shape=cylinder3;whiteSpace=wrap;html=1;fontFamily=Comic Sans MS;fontSize=15;fillColor=#f8cecc;strokeColor=#b85450;dashed=1;shadow=1;" value="🚫&#xa;images/" vertex="1">
+          <mxGeometry height="82" width="130" x="410" y="54" as="geometry" />
+        </mxCell>
+        <mxCell id="qemu-entry" parent="separation-zone" style="rounded=1;whiteSpace=wrap;html=1;fontFamily=Comic Sans MS;fontSize=15;fillColor=#e1d5e7;strokeColor=#9673a6;shadow=1;sketch=1;curveFitting=1;jiggle=2;" value="⌨　run / shell / debug" vertex="1">
+          <mxGeometry height="58" width="235" x="705" y="68" as="geometry" />
+        </mxCell>
+        <mxCell id="prepare-image" parent="separation-zone" style="shape=cylinder3;whiteSpace=wrap;html=1;fontFamily=Comic Sans MS;fontSize=14;fillColor=#ffe6cc;strokeColor=#d79b00;shadow=1;sketch=1;curveFitting=1;jiggle=2;" value="💽&#xa;&lt;b&gt;prepare-image&lt;/b&gt;" vertex="1">
+          <mxGeometry height="90" width="160" x="1010" y="52" as="geometry" />
+        </mxCell>
+        <mxCell id="qemu" parent="separation-zone" style="rounded=1;whiteSpace=wrap;html=1;fontFamily=Comic Sans MS;fontSize=16;fillColor=#dae8fc;strokeColor=#6c8ebf;strokeWidth=2;shadow=1;sketch=1;curveFitting=1;jiggle=2;" value="&lt;font style=&quot;font-size: 22px;&quot;&gt;🖥&lt;/font&gt;&#xa;&lt;b&gt;QEMU&lt;/b&gt;" vertex="1">
+          <mxGeometry height="86" width="190" x="1255" y="54" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-build-no-image" edge="1" parent="separation-zone" source="pure-build" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=none;dashed=1;strokeColor=#b85450;fontFamily=Comic Sans MS;fontSize=12;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" target="image-isolated" value="不读取 / 不恢复">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-qemu-prepare" edge="1" parent="separation-zone" source="qemu-entry" style="shape=flexArrow;endArrow=classic;html=1;rounded=0;fillColor=#d79b00;strokeColor=#d79b00;sketch=1;curveFitting=1;jiggle=2;" target="prepare-image" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-prepare-qemu" edge="1" parent="separation-zone" source="prepare-image" style="shape=flexArrow;endArrow=classic;html=1;rounded=0;fillColor=#6c8ebf;strokeColor=#6c8ebf;sketch=1;curveFitting=1;jiggle=2;" target="qemu" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-artifact-separation" edge="1" parent="1" source="artifact-zone" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=classic;strokeColor=#82b366;strokeWidth=2;fontFamily=Comic Sans MS;fontSize=12;sketch=1;curveFitting=1;jiggle=2;exitX=0.5;exitY=1;entryX=0.691;entryY=0.005;entryDx=0;entryDy=0;entryPerimeter=0;" target="separation-zone" value="产物就绪">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
