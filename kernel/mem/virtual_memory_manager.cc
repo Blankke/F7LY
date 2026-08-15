@@ -1922,6 +1922,8 @@ namespace mem
                PTE_R | PTE_W | PTE_A | PTE_D);
         kvmmap(pt, VF2_SYS_SYSCON_BASE_V, VF2_SYS_SYSCON_BASE, 0x1000,
                PTE_R | PTE_W | PTE_A | PTE_D);
+        kvmmap(pt, VF2_CCACHE_BASE_V, VF2_CCACHE_BASE, 0x4000,
+               PTE_R | PTE_W | PTE_A | PTE_D);
 #endif
 #endif
         // 初始化堆内存

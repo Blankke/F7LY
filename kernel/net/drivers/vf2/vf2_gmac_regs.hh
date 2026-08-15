@@ -48,6 +48,9 @@ namespace net::vf2
     constexpr uint32 k_desc_ioc = 1u << 30;
     constexpr uint32 k_desc_buf1_valid = 1u << 24;
     constexpr uint32 k_desc_len_mask = 0x7fffu;
+    // DWMAC 5.20 uses different descriptor words for TX and RX IOC.
+    constexpr uint32 k_tx_desc_ioc = 1u << 31;
+    constexpr uint32 k_tx_desc_error_summary = 1u << 15;
 
     constexpr uint32 k_mdio_busy = 1u << 0;
     constexpr uint32 k_mdio_goc_shift = 2;
@@ -80,6 +83,10 @@ namespace net::vf2
     constexpr uint16 k_yt_ext_data = 0x1f;
     constexpr uint16 k_yt_ext_chip_config = 0xa001;
     constexpr uint16 k_yt_ext_rgmii_config = 0xa003;
+    constexpr uint16 k_yt_rxc_delay_enable = 1u << 8;
+    constexpr uint16 k_yt_rx_delay_mask = 0x0fu << 10;
+    constexpr uint16 k_yt_ge_tx_delay_mask = 0x0fu;
+    constexpr uint16 k_yt_delay_1_95ns = 13u;
 
     struct DmaDescriptor
     {

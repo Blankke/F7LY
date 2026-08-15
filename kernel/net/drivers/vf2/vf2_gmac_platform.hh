@@ -16,6 +16,8 @@ namespace net::vf2
     void delay_us(uint32 usec);
     void io_fence();
     uint64 dma_address(const void *ptr);
+    bool dma_sync_for_device(const void *ptr, uint64 size);
+    bool dma_sync_for_cpu(void *ptr, uint64 size);
     bool platform_init();
     void platform_set_speed(uint32 speed_mbps);
 }

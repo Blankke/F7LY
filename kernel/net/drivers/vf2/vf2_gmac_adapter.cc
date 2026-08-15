@@ -100,7 +100,18 @@ namespace net
             return -1;
         }
         buf_list_merge_packet(buf_list_head, tx_buffer);
+        if (len >= 14)
+        {
+            uint16 ethertype = (static_cast<uint16>(tx_buffer[12]) << 8) | tx_buffer[13];
+            printf("[vf2_adapter] ONPS TX len=%u ethertype=0x%x\n", len, ethertype);
+        }
+        else
+        {
+            printf("[vf2_adapter] ONPS TX short frame len=%u\n", len);
+        }
         int ret = vf2_gmac_send(tx_buffer, len);
+        if (ret < 0)
+            printf("[vf2_adapter] GMAC TX rejected ret=%d\n", ret);
         if (error) *error = ret < 0 ? 1 : 0;
         return ret < 0 ? -1 : static_cast<int>(len);
     }

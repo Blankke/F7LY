@@ -24,6 +24,8 @@ namespace net
         {
             bool initialized = false;
             bool link_up = false;
+            bool link_reported = false;
+            bool phy_link_up = false;
             bool full_duplex = true;
             uint16 phy_addr = 0;
             uint32 speed = 1000;
@@ -31,6 +33,7 @@ namespace net
             uint32 tx_tail = 0;
             uint32 rx_head = 0;
             uint64 tx_packets = 0;
+            uint64 tx_completed = 0;
             uint64 rx_packets = 0;
             uint64 tx_errors = 0;
             uint64 rx_errors = 0;
@@ -189,24 +192,35 @@ namespace net
                 vf2::delay_us(1000);
             }
 
-            const uint16 advertise = 0x01e1;
-            mdio_write(g_state.phy_addr, k_phy_advertise, advertise);
-            mdio_write(g_state.phy_addr, k_phy_ctrl1000, 0x0300);
-            mdio_write(g_state.phy_addr, k_phy_bmcr, k_bmcr_an_enable | k_bmcr_an_restart);
+            // The board DTS uses rgmii-id. Match the Linux-verified YT8531
+            // setup: clear the additional RXC delay and apply 1.95 ns delays
+            // through the regular RX/TX delay fields.
+            uint16 chip_config = 0;
+            uint16 rgmii_config = 0;
+            if (yt_ext_read(g_state.phy_addr, k_yt_ext_chip_config, &chip_config) < 0 ||
+                yt_ext_read(g_state.phy_addr, k_yt_ext_rgmii_config, &rgmii_config) < 0)
+                return false;
 
-            // YT8531 RGMII-ID: enable RX clock delay and use the board-tested
-            // RocketOS delay fields. Preserve unrelated vendor bits.
-            uint16 ext = 0;
-            if (yt_ext_read(g_state.phy_addr, k_yt_ext_chip_config, &ext) == 0)
-            {
-                ext |= 1u << 8;
-                yt_ext_write(g_state.phy_addr, k_yt_ext_chip_config, ext);
-            }
-            if (yt_ext_read(g_state.phy_addr, k_yt_ext_rgmii_config, &ext) == 0)
-            {
-                ext = static_cast<uint16>((ext & ~0x3fffu) | (0x2u << 10) | (5u << 4));
-                yt_ext_write(g_state.phy_addr, k_yt_ext_rgmii_config, ext);
-            }
+            uint16 new_chip_config = static_cast<uint16>(
+                chip_config & ~k_yt_rxc_delay_enable);
+            uint16 new_rgmii_config = static_cast<uint16>(
+                (rgmii_config & ~(k_yt_rx_delay_mask | k_yt_ge_tx_delay_mask)) |
+                (k_yt_delay_1_95ns << 10) | k_yt_delay_1_95ns);
+            if (yt_ext_write(g_state.phy_addr, k_yt_ext_chip_config, new_chip_config) < 0 ||
+                yt_ext_write(g_state.phy_addr, k_yt_ext_rgmii_config, new_rgmii_config) < 0 ||
+                yt_ext_read(g_state.phy_addr, k_yt_ext_chip_config, &chip_config) < 0 ||
+                yt_ext_read(g_state.phy_addr, k_yt_ext_rgmii_config, &rgmii_config) < 0)
+                return false;
+
+            printf("[vf2_gmac] YT8531 rgmii-id a001=0x%x a003=0x%x\n",
+                   chip_config, rgmii_config);
+
+            const uint16 advertise = 0x01e1;
+            if (mdio_write(g_state.phy_addr, k_phy_advertise, advertise) < 0 ||
+                mdio_write(g_state.phy_addr, k_phy_ctrl1000, 0x0300) < 0 ||
+                mdio_write(g_state.phy_addr, k_phy_bmcr,
+                           k_bmcr_an_enable | k_bmcr_an_restart) < 0)
+                return false;
             return true;
         }
 
@@ -219,11 +233,19 @@ namespace net
             if (mdio_read(g_state.phy_addr, k_phy_bmsr, &bmsr) < 0 ||
                 mdio_read(g_state.phy_addr, k_phy_spec_status, &status) < 0)
                 return;
-            g_state.link_up = (bmsr & k_bmsr_link) != 0;
+            bool link_up = (bmsr & k_bmsr_link) != 0;
             uint32 speed_code = (status & k_yt_speed_mask) >> k_yt_speed_shift;
             g_state.speed = speed_code == 2 ? 1000 : (speed_code == 1 ? 100 : 10);
             g_state.full_duplex = (status & k_yt_duplex) != 0;
 
+            if (!g_state.link_reported || g_state.phy_link_up != link_up)
+            {
+                printf("[vf2_gmac] PHY link=%s bmsr=0x%x status=0x%x speed=%u duplex=%s\n",
+                       link_up ? "up" : "down", bmsr, status, g_state.speed,
+                       g_state.full_duplex ? "full" : "half");
+                g_state.link_reported = true;
+            }
+            g_state.phy_link_up = link_up;
             uint32 config = mac_read(k_mac_configuration);
             config &= ~(k_mac_ps | k_mac_fes | k_mac_dm);
             if (g_state.speed < 1000)
@@ -234,9 +256,10 @@ namespace net
                 config |= k_mac_dm;
             mac_write(k_mac_configuration, config);
             vf2::platform_set_speed(g_state.speed);
+            g_state.link_up = link_up;
         }
 
-        void init_rings()
+        bool init_rings()
         {
             memset(g_tx_ring, 0, sizeof(g_tx_ring));
             memset(g_rx_ring, 0, sizeof(g_rx_ring));
@@ -250,7 +273,9 @@ namespace net
                 g_rx_ring[i].des2 = 0;
                 g_rx_ring[i].des3 = k_desc_own | k_desc_buf1_valid | k_desc_ioc;
             }
-            vf2::io_fence();
+            return vf2::dma_sync_for_device(g_tx_ring, sizeof(g_tx_ring)) &&
+                   vf2::dma_sync_for_device(g_rx_ring, sizeof(g_rx_ring)) &&
+                   vf2::dma_sync_for_device(g_rx_buffers, sizeof(g_rx_buffers));
         }
 
         void reclaim_tx()
@@ -258,11 +283,26 @@ namespace net
             while (g_state.tx_head != g_state.tx_tail)
             {
                 uint32 idx = g_state.tx_head % k_ring_count;
-                vf2::io_fence();
+                if (!vf2::dma_sync_for_cpu(&g_tx_ring[idx], sizeof(g_tx_ring[idx])))
+                {
+                    ++g_state.tx_errors;
+                    break;
+                }
                 if ((g_tx_ring[idx].des3 & k_desc_own) != 0)
                     break;
+                if (g_state.tx_completed < 16)
+                {
+                    uint32 dma_status = mac_read(k_dma_ch0_status);
+                    printf("[vf2_gmac] TX complete idx=%u des0=0x%x des1=0x%x des2=0x%x des3=0x%x desc_err=%u dma_status=0x%x\n",
+                           idx, g_tx_ring[idx].des0, g_tx_ring[idx].des1,
+                           g_tx_ring[idx].des2, g_tx_ring[idx].des3,
+                           static_cast<uint32>((g_tx_ring[idx].des3 &
+                                                k_tx_desc_error_summary) != 0),
+                           dma_status);
+                }
                 memset(&g_tx_ring[idx], 0, sizeof(g_tx_ring[idx]));
                 ++g_state.tx_head;
+                ++g_state.tx_completed;
             }
         }
 #endif
@@ -317,7 +357,12 @@ namespace net
                                      (static_cast<uint32>(g_state.mac[5]) << 8) |
                                      (1u << 31));
 
-        init_rings();
+        if (!init_rings())
+        {
+            printf("[vf2_gmac] failed to synchronize DMA rings\n");
+            g_state.lock.release();
+            return false;
+        }
         uint64 tx_pa = vf2::dma_address(g_tx_ring);
         uint64 rx_pa = vf2::dma_address(g_rx_ring);
         mac_write(k_dma_ch0_tx_desc_list_high, static_cast<uint32>(tx_pa >> 32));
@@ -364,16 +409,34 @@ namespace net
             return -11;
         }
         memcpy(g_tx_buffers[idx], data, len);
+        if (!vf2::dma_sync_for_device(g_tx_buffers[idx], len))
+        {
+            ++g_state.tx_errors;
+            g_state.lock.release();
+            return -1;
+        }
         uint64 pa = vf2::dma_address(g_tx_buffers[idx]);
         g_tx_ring[idx].des0 = static_cast<uint32>(pa);
         g_tx_ring[idx].des1 = static_cast<uint32>(pa >> 32);
-        g_tx_ring[idx].des2 = len | k_desc_ioc;
+        g_tx_ring[idx].des2 = len | k_tx_desc_ioc;
         vf2::io_fence();
         g_tx_ring[idx].des3 = k_desc_own | k_desc_fd | k_desc_ld | len;
-        vf2::io_fence();
+        if (!vf2::dma_sync_for_device(&g_tx_ring[idx], sizeof(g_tx_ring[idx])))
+        {
+            ++g_state.tx_errors;
+            g_state.lock.release();
+            return -1;
+        }
         ++g_state.tx_tail;
         mac_write(k_dma_ch0_tx_tail,
                   static_cast<uint32>(vf2::dma_address(&g_tx_ring[idx])));
+        if (g_state.tx_packets < 16)
+        {
+            printf("[vf2_gmac] TX submit idx=%u len=%u ring_pa=0x%x buf_pa=0x%x des3=0x%x tail=0x%x\n",
+                   idx, len, static_cast<uint32>(vf2::dma_address(&g_tx_ring[idx])),
+                   static_cast<uint32>(pa), g_tx_ring[idx].des3,
+                   mac_read(k_dma_ch0_tx_tail));
+        }
         ++g_state.tx_packets;
         g_state.lock.release();
         return static_cast<int>(len);
@@ -389,7 +452,12 @@ namespace net
             return -1;
         g_state.lock.acquire();
         uint32 idx = g_state.rx_head % k_ring_count;
-        vf2::io_fence();
+        if (!vf2::dma_sync_for_cpu(&g_rx_ring[idx], sizeof(g_rx_ring[idx])))
+        {
+            ++g_state.rx_errors;
+            g_state.lock.release();
+            return -1;
+        }
         if ((g_rx_ring[idx].des3 & k_desc_own) != 0)
         {
             g_state.lock.release();
@@ -402,6 +470,12 @@ namespace net
             ++g_state.rx_errors;
             packet_len = 0;
         }
+        if (packet_len != 0 &&
+            !vf2::dma_sync_for_cpu(g_rx_buffers[idx], packet_len))
+        {
+            ++g_state.rx_errors;
+            packet_len = 0;
+        }
         if (packet_len != 0)
             memcpy(data, g_rx_buffers[idx], packet_len);
         *len = packet_len;
@@ -409,9 +483,19 @@ namespace net
         g_rx_ring[idx].des0 = static_cast<uint32>(pa);
         g_rx_ring[idx].des1 = static_cast<uint32>(pa >> 32);
         g_rx_ring[idx].des2 = 0;
-        vf2::io_fence();
+        if (!vf2::dma_sync_for_device(g_rx_buffers[idx], k_rx_buffer_size))
+        {
+            ++g_state.rx_errors;
+            g_state.lock.release();
+            return -1;
+        }
         g_rx_ring[idx].des3 = k_desc_own | k_desc_buf1_valid | k_desc_ioc;
-        vf2::io_fence();
+        if (!vf2::dma_sync_for_device(&g_rx_ring[idx], sizeof(g_rx_ring[idx])))
+        {
+            ++g_state.rx_errors;
+            g_state.lock.release();
+            return -1;
+        }
         mac_write(k_dma_ch0_rx_tail, static_cast<uint32>(vf2::dma_address(&g_rx_ring[idx])));
         ++g_state.rx_head;
         if (packet_len != 0)
@@ -446,10 +530,11 @@ namespace net
     void vf2_gmac_debug_status()
     {
 #ifdef VISIONFIVE2
-        printf("[vf2_gmac] init=%d link=%d speed=%u tx=%u/%u rx=%u status=0x%x txp=%llu rxp=%llu txe=%llu rxe=%llu\n",
+        printf("[vf2_gmac] init=%d link=%d speed=%u tx=%u/%u rx=%u status=0x%x txp=%llu txc=%llu rxp=%llu txe=%llu rxe=%llu\n",
                g_state.initialized, g_state.link_up, g_state.speed, g_state.tx_head,
                g_state.tx_tail, g_state.rx_head, vf2::read_reg(VF2_GMAC1_BASE_V, k_dma_ch0_status),
-               g_state.tx_packets, g_state.rx_packets, g_state.tx_errors, g_state.rx_errors);
+               g_state.tx_packets, g_state.tx_completed, g_state.rx_packets,
+               g_state.tx_errors, g_state.rx_errors);
 #endif
     }
 }
