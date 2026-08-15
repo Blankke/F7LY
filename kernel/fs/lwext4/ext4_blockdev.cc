@@ -335,12 +335,14 @@ int ext4_blocks_set_direct_coherent(struct ext4_blockdev *bdev,
         return ENXIO;
 
     // 旧 dirty buffer 必须先落盘，避免批量 direct 写完成后又以旧内容回写。
-    // 只遍历实际存在的缓存节点，使新分配的长连续区间保持 O(log N) 查询成本。
-    // 调用方持有挂载排他锁，失效到 direct I/O 结束之间不会重新填入缓存。
-    const int cache_result =
-        ext4_bcache_flush_and_invalidate_lba(bdev->bc, lba, cnt);
-    if (cache_result != EOK)
-        return cache_result;
+    // 调用方持有挂载排他锁，所以失效到 direct I/O 结束之间不会重新填入缓存。
+    for (uint32_t index = 0; index < cnt; ++index)
+    {
+        const int rc = ext4_block_flush_lba(bdev, lba + index);
+        if (rc != EOK)
+            return rc;
+    }
+    ext4_bcache_invalidate_lba(bdev->bc, lba, cnt);
     return ext4_blocks_set_direct(bdev, buf, lba, cnt);
 }
 

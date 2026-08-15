@@ -8,6 +8,9 @@ LS2K1000_DNS ?= 192.168.1.1
 LS2K1000_BROADCAST ?= 192.168.1.255
 
 PROFILE_NAME := Loongson 2K1000
+# LA264 真机不保证未对齐多字节访问；只在该硬件画像要求编译器拆分。
+# QEMU virt 具备 UAL，不应承担 packed 元数据访问的额外指令开销。
+PROFILE_CODEGEN_FLAGS := -mstrict-align
 PROFILE_CPPFLAGS := -DLS2K1000_IPV4=\"$(LS2K1000_IPV4)\" \
                      -DLS2K1000_NETMASK=\"$(LS2K1000_NETMASK)\" \
                      -DLS2K1000_GATEWAY=\"$(LS2K1000_GATEWAY)\" \

@@ -161,32 +161,6 @@ long UartManager::put_chars_sync(const u8 *source, long nbytes)
     return written;
 }
 
-long UartManager::put_chars_sync_crlf(const u8 *source, long nbytes)
-{
-    if (source == nullptr || nbytes <= 0)
-    {
-        return 0;
-    }
-
-    // 整次 TTY write 共用一个生产者事务；插入 CR 时也不能释放锁，否则
-    // 并发内核日志或另一个进程的输出会穿插到同一行中。
-    _write_transaction_lock.acquire();
-    long consumed = 0;
-    for (; consumed < nbytes; ++consumed)
-    {
-        if (source[consumed] == '\n' && put_char_sync_unserialized('\r') < 0)
-        {
-            break;
-        }
-        if (put_char_sync_unserialized(source[consumed]) < 0)
-        {
-            break;
-        }
-    }
-    _write_transaction_lock.release();
-    return consumed;
-}
-
 int UartManager::get_char_sync(u8 *character)
 {
     if (character == nullptr)

@@ -25,7 +25,6 @@ namespace dev
         abi::KernelTermios snapshot() const;
         abi::KernelTermio legacy_snapshot() const;
         ConsoleReadSettings read_settings() const;
-        bool map_output_newline() const;
         void apply(const abi::KernelTermios &termios);
         void apply_legacy(const abi::KernelTermio &termio);
 

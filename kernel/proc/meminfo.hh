@@ -25,7 +25,7 @@ inline eastl::string meminfo_unsigned_decimal(uint64 value)
 inline eastl::string get_meminfo()
 {
     // /proc/meminfo 必须反映 DTB/PMM 的实际容量，不能继续保留固定的
-    // 固定容量字符串，否则资源感知型用户程序会错误判断内存上限。
+    // 16GiB 字符串，否则 guest 内的 Cargo/构建脚本会错误判断内存上限。
     const uint64 total_kb =
         static_cast<uint64>(mem::k_pmm.get_page_count()) * PGSIZE / 1024;
     const uint64 free_kb =

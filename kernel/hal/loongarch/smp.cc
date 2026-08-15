@@ -86,11 +86,9 @@ namespace hal::smp
 {
 namespace
 {
-    // 多 vCPU 模拟器可能放大次核启动延迟。启动 IPI 已是 blocking 发送，平台
-    // 画像只需提供与执行环境匹配的有界等待窗口。
-    static_assert(F7LY_SECONDARY_START_TIMEOUT_US > 0);
-    constexpr uint64 k_secondary_start_timeout_us =
-        F7LY_SECONDARY_START_TIMEOUT_US;
+    // 12 个 TCG vCPU 与 BuildStorm 启动并发时，2 秒不足以保证所有次核都
+    // 获得宿主时间片。启动 IPI 已是 blocking 发送，只需给初始化留出有界窗口。
+    constexpr uint64 k_secondary_start_timeout_us = 30'000'000ULL;
 
     [[noreturn]] void run_secondary(uint64 cpu_id)
     {

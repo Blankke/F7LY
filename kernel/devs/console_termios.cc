@@ -37,12 +37,6 @@ namespace dev
         return settings;
     }
 
-    bool ConsoleTermiosController::map_output_newline() const
-    {
-        return (_termios.c_oflag & OPOST) != 0 &&
-               (_termios.c_oflag & ONLCR) != 0;
-    }
-
     void ConsoleTermiosController::apply(const abi::KernelTermios &termios)
     {
         _termios = termios;

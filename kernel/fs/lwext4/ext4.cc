@@ -137,7 +137,7 @@ namespace
 {
 /*
  * lwext4 原生路径查找每次都从根目录开始，并为每个组件重新扫描目录块。
- * 深目录元数据负载会对同一批路径反复交错执行 open/stat/readlink；
+ * Cargo/rustc 会让 open/stat/readlink 对同一批深层源码路径反复交错访问；
  * 即使块已经在 bcache 中，目录项解析仍会占据 ext4 全局锁的大部分时间。
  *
  * 缓存键使用“文件系统 + 父 inode + 单个名称”，因此既能复用公共路径前缀，
@@ -2647,15 +2647,17 @@ int ext4_fwrite(ext4_file *file, const void *buf, size_t size, size_t *wcnt)
 {
     uint32_t unalg;
     uint32_t iblk_idx;
+    uint32_t iblock_last;
     uint32_t ifile_blocks;
     uint32_t block_size;
 
     uint32_t fblock_count;
     ext4_fsblk_t fblk;
+    ext4_fsblk_t fblock_start;
 
     struct ext4_inode_ref ref;
     const uint8_t *u8_buf = (uint8_t *)buf;
-    int r;
+    int r, rr = EOK;
     int cache_r = EOK;
     bool write_back_enabled = false;
 
@@ -2705,6 +2707,7 @@ int ext4_fwrite(ext4_file *file, const void *buf, size_t size, size_t *wcnt)
         goto Finish;
     }
     block_size = ext4_sb_get_block_size(sb);
+    iblock_last = (uint32_t)((file->fpos + size) / block_size);
     iblk_idx = (uint32_t)(file->fpos / block_size);
     ifile_blocks = (uint32_t)((file->fsize + block_size - 1) / block_size);
 
@@ -2741,50 +2744,79 @@ int ext4_fwrite(ext4_file *file, const void *buf, size_t size, size_t *wcnt)
         iblk_idx++;
     }
 
+    fblock_start = 0;
+    fblock_count = 0;
     while (size >= block_size)
     {
-        uint32_t requested_blocks = static_cast<uint32_t>(size / block_size);
-        if (iblk_idx < ifile_blocks)
+
+        while (iblk_idx < iblock_last)
         {
-            const uint32_t existing_blocks = ifile_blocks - iblk_idx;
-            if (requested_blocks > existing_blocks)
-                requested_blocks = existing_blocks;
-            r = ext4_fs_get_inode_dblk_write_run(
-                &ref, iblk_idx, requested_blocks, &fblk, &fblock_count);
+            if (iblk_idx < ifile_blocks)
+            {
+                r = ext4_fs_init_inode_dblk_idx(&ref, iblk_idx, &fblk);
+                if (r != EOK)
+                    goto Finish;
+            }
+            else
+            {
+                rr = ext4_fs_append_inode_dblk(&ref, &fblk, &iblk_idx);
+                if (rr != EOK)
+                {
+                    /* Unable to append more blocks. But
+                     * some block might be allocated already
+                     * */
+                    break;
+                }
+            }
+
+            iblk_idx++;
+
+            if (!fblock_start)
+            {
+                fblock_start = fblk;
+            }
+
+            if ((fblock_start + fblock_count) != fblk)
+                break;
+
+            fblock_count++;
         }
-        else
-        {
-            ext4_lblk_t appended_iblock = 0;
-            r = ext4_fs_append_inode_dblk_run(
-                &ref, requested_blocks, &fblk, &appended_iblock, &fblock_count);
-            if (r == EOK && appended_iblock != iblk_idx)
-                r = EIO;
-        }
-        if (r != EOK)
-            goto out_fsize;
-        if (fblock_count == 0 || fblock_count > requested_blocks)
+
+        uint32_t remaining_full_blocks = static_cast<uint32_t>(size / block_size);
+        if (fblock_count == 0 || fblock_count > remaining_full_blocks)
         {
             r = EIO;
-            goto out_fsize;
+            goto Finish;
         }
 
         /*
-         * extent 解析/分配和数据传输都以连续 run 为单位。先刷掉并失效同范围
-         * 旧缓存，再由块设备的 bounce 上限自动分片；首尾非整块仍走 write-back。
+         * 完整连续块无需读改写。先刷掉并失效同范围旧缓存，再由块设备的
+         * 128 KiB bounce 自动分片合并写入；首尾非整块仍走 write-back。
          */
         r = ext4_blocks_set_direct_coherent(file->mp->fs.bdev, u8_buf,
-                                            fblk, fblock_count);
+                                            fblock_start, fblock_count);
         if (r != EOK)
-            goto out_fsize;
+            break;
 
         const size_t transfer_bytes = static_cast<size_t>(block_size) * fblock_count;
         size -= transfer_bytes;
         u8_buf += transfer_bytes;
         file->fpos += transfer_bytes;
-        iblk_idx += fblock_count;
 
         if (wcnt)
             *wcnt += transfer_bytes;
+
+        fblock_start = fblk;
+        fblock_count = 1;
+
+        if (rr != EOK)
+        {
+            /*ext4_fs_append_inode_block has failed and no
+             * more blocks might be written. But node size
+             * should be updated.*/
+            r = rr;
+            goto out_fsize;
+        }
     }
 
     if (size)

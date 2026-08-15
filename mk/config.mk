@@ -48,6 +48,7 @@ endif
 PROFILE_ARCH :=
 PROFILE_BOARD :=
 PROFILE_CPPFLAGS :=
+PROFILE_CODEGEN_FLAGS :=
 PROFILE_SRCS :=
 PROFILE_KERNEL_SUFFIX :=
 PROFILE_MAX_CPUS :=
@@ -99,20 +100,19 @@ ifeq ($(PROFILE_ARCH),riscv)
 else ifeq ($(PROFILE_ARCH),loongarch)
   DEFAULT_CROSS_COMPILE := loongarch64-linux-gnu-
   ARCH_DEFINES := -DLOONGARCH
-  # LA264 真机对未对齐的多字节访存会触发 ALE。内核和内置 initcode
-  # 统一要求编译器生成严格对齐访问，避免 QEMU 掩盖真机故障。
-  LOONGARCH_ALIGNMENT_FLAGS := -mstrict-align
-  KERNEL_ABI_FLAGS := -march=loongarch64 -mabi=lp64s -mfpu=none \
-                      $(LOONGARCH_ALIGNMENT_FLAGS)
+  # 对齐能力属于平台而非 ISA ABI：支持 UAL 的 QEMU 应保留原生宽访存，
+  # 不支持未对齐访问的真机画像再通过 PROFILE_CODEGEN_FLAGS 收紧代码生成。
+  # 这对 packed 文件系统元数据尤为重要，避免一次宽访问被展开为多次字节访问。
+  KERNEL_ABI_FLAGS := -march=loongarch64 -mabi=lp64s -mfpu=none
   # Linux 交叉 sysroot 同样只提供 lp64d glibc 头；头文件选择不改变
   # -mabi=lp64s -mfpu=none 约束的内核 soft-float 代码生成。
   KERNEL_SYSROOT_HEADER_FLAGS := \
       -U__loongarch_soft_float -D__loongarch_double_float
-  KERNEL_ARCH_FLAGS := $(KERNEL_ABI_FLAGS) -mcmodel=normal \
+  KERNEL_ARCH_FLAGS := $(KERNEL_ABI_FLAGS) $(PROFILE_CODEGEN_FLAGS) -mcmodel=normal \
                        $(KERNEL_SYSROOT_HEADER_FLAGS)
-  INITCODE_ABI_FLAGS := -march=loongarch64 -mabi=lp64d -mfpu=64 \
-                        $(LOONGARCH_ALIGNMENT_FLAGS)
+  INITCODE_ABI_FLAGS := -march=loongarch64 -mabi=lp64d -mfpu=64
   INITCODE_ARCH_FLAGS := $(INITCODE_ABI_FLAGS) -mcmodel=normal
+  INITCODE_ARCH_FLAGS += $(PROFILE_CODEGEN_FLAGS)
   CONTEXT_ASM_FLAGS := -march=loongarch64 -mabi=lp64s -mfpu=64
   KERNEL_ARCH_NAME := la
 else

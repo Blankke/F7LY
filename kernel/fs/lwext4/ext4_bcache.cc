@@ -337,33 +337,6 @@ void ext4_bcache_invalidate_lba(struct ext4_bcache *bc, uint64_t from, uint32_t 
     }
 }
 
-int ext4_bcache_flush_and_invalidate_lba(struct ext4_bcache *bc,
-                                         uint64_t from,
-                                         uint32_t cnt)
-{
-    if (cnt == 0)
-        return EOK;
-
-    uint64_t end = from + cnt - 1;
-    if (end < from)
-        end = UINT64_MAX;
-
-    struct ext4_buf key = {.lba = from};
-    struct ext4_buf *first =
-        RB_NFIND(ext4_buf_lba_tree, &bc->lba_root, &key);
-    struct ext4_buf *buf;
-    RB_FOREACH_FROM(buf, ext4_buf_lba_tree, first) {
-        if (buf->lba > end)
-            break;
-
-        const int rc = ext4_block_flush_buf(bc->bdev, buf);
-        if (rc != EOK)
-            return rc;
-        ext4_bcache_invalidate_buf(bc, buf);
-    }
-    return EOK;
-}
-
 struct ext4_buf *ext4_bcache_find_get(struct ext4_bcache *bc, struct ext4_block *b, uint64_t lba) {
     struct ext4_buf *buf = ext4_buf_lookup(bc, lba);
     if (buf) {

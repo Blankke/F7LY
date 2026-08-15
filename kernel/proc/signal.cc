@@ -63,7 +63,7 @@ namespace
             return true;
         }
 
-        // pthread 栈在不同 libc 和运行环境中不一定保留 MAP_STACK/GROWSDOWN 标记；
+        // pthread 栈在不同 libc/评测镜像中不一定保留 MAP_STACK/GROWSDOWN 标记；
         // 但线程的工作栈仍是匿名私有映射。只对非主线程或静态入口放开这类 VMA，
         // 让取消信号/异步信号帧能落回真实线程栈，普通文件映射和共享映射仍不会被提升。
         return (is_thread_group_member_task(p) || is_entry_static_task(p)) &&

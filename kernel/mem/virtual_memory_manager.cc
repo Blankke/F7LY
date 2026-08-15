@@ -15,7 +15,6 @@
 #include "fs/vfs/vfs_ext4_ext.hh" // 添加vfs_ext_get_filesize函数
 #include "proc/signal.hh"         // 添加信号处理
 #include "proc/process_memory_manager.hh"
-#include "proc/file_page_cache.hh"
 #include "proc/vm_object.hh"
 #include "proc/proc_manager.hh"   // 添加进程管理
 #include "fs/lwext4/ext4_errno.hh"
@@ -58,27 +57,6 @@ namespace mem
 #else
             return reinterpret_cast<void *>(pa);
 #endif
-        }
-
-        // 文件页缓存是可回收内存。用户页分配只在首次失败时淘汰一小批 clean
-        // cache owner 并重试，既不增加正常缺页路径开销，也避免短时缓存高水位
-        // 把仍可满足的匿名页、COW 页或页表分配误报为 ENOMEM。
-        constexpr uint32 k_user_page_reclaim_batch = 256;
-
-        inline void *try_alloc_user_page(bool zero_initialize = true)
-        {
-            void *page = zero_initialize
-                             ? k_pmm.try_alloc_page()
-                             : k_pmm.try_alloc_page_uninitialized();
-            if (page != nullptr)
-            {
-                return page;
-            }
-
-            proc::file_page_cache::reclaim_clean_pages(k_user_page_reclaim_batch);
-            return zero_initialize
-                       ? k_pmm.try_alloc_page()
-                       : k_pmm.try_alloc_page_uninitialized();
         }
 
 #ifdef RISCV
@@ -151,7 +129,7 @@ namespace mem
             else
             {
                 // detached child 页表/内核初始化不属于任何活跃 mm，只能保留
-                // 全局后端作为生命周期边界；活跃用户地址空间会命中上面的 mm。
+                // 全局后端作为生命周期边界；BuildStorm 热路径会命中上面的 mm。
                 hal::tlb::flush_range_all_cpus(start, size);
             }
         }
@@ -535,7 +513,7 @@ namespace mem
         old_sz = PGROUNDUP(old_sz);
         for (uint64 a = old_sz; a < new_sz; a += PGSIZE)
         {
-            mem = try_alloc_user_page();
+            mem = PhysicalMemoryManager::try_alloc_page();
             if (mem == nullptr)
             {
                 vmdealloc(pt, a, old_sz);
@@ -559,7 +537,7 @@ namespace mem
         old_sz = PGROUNDUP(old_sz);
         for (uint64 a = old_sz; a < new_sz; a += PGSIZE)
         {
-            mem = try_alloc_user_page();
+            mem = PhysicalMemoryManager::try_alloc_page();
             if (mem == nullptr)
             {
                 printfRed("vmalloc: alloc_page failed\n");
@@ -1108,7 +1086,7 @@ namespace mem
         fs::file *vf = vm->vfile;
         // ELF/动态库读取存在跨层短读路径；在所有读入分支都能证明完整覆盖前，
         // 文件映射仍从零页开始，避免未初始化字节进入动态链接器元数据。
-        void *pa = try_alloc_user_page();
+        void *pa = k_pmm.try_alloc_page();
         if (pa == nullptr)
         {
             printfRed("[allocate_vma_page] alloc_page failed for va: %p\n", va);
@@ -1451,7 +1429,7 @@ namespace mem
             return 0;
         }
 
-        void *new_page = try_alloc_user_page(false);
+        void *new_page = k_pmm.try_alloc_page_uninitialized();
         if (new_page == nullptr)
         {
             return -1;
@@ -1530,7 +1508,7 @@ namespace mem
             return 0;
         }
 
-        void *new_page = try_alloc_user_page(false);
+        void *new_page = k_pmm.try_alloc_page_uninitialized();
         if (new_page == nullptr)
         {
             return -1;
@@ -1594,7 +1572,7 @@ namespace mem
          * 单次保留 256 个待释放物理页只占 2 KiB 内核栈，仍明显低于 16 KiB
          * 进程内核栈上限。RISC-V 超过 64 页时本地已退化为一次全 TLB
          * sfence，LoongArch 对任意范围也都会全量失效；扩大批次不会增加
-         * 单次硬件失效成本，却能让大块 arena 的 MADV_DONTNEED
+         * 单次硬件失效成本，却能让 jemalloc 大 arena 的 MADV_DONTNEED
          * 少做最多四分之三的跨核 IPI 与确认等待。
         */
         constexpr int k_unmap_batch_pages = 256;
@@ -1761,7 +1739,7 @@ namespace mem
         PageTable pt;
         pt.set_global();
 
-        uint64 addr = reinterpret_cast<uint64>(try_alloc_user_page());
+        uint64 addr = (uint64)PhysicalMemoryManager::try_alloc_page();
         if (addr == 0)
             return pt;
         pt.set_base(addr);
@@ -2014,7 +1992,7 @@ namespace mem
                     return fail_copy();
                 }
 
-                void *new_page = try_alloc_user_page(false);
+                void *new_page = mem::PhysicalMemoryManager::try_alloc_page_uninitialized();
                 if (new_page == nullptr)
                 {
                     release_unconsumed_retains(index + 1);
@@ -2062,7 +2040,7 @@ namespace mem
         // printfBlue("[vmalloc]  another page :%p,walk:%p\n",a,pt.walk(a,0).get_data());
         for (; a < newsz; a += PGSIZE)
         {
-            pa = reinterpret_cast<uint64>(try_alloc_user_page());
+            pa = (uint64)k_pmm.try_alloc_page();
             // printfCyan("[vmalloc] alloc page: %p\n", pa);
             if (pa == 0)
             {
@@ -2088,7 +2066,7 @@ namespace mem
         oldsz = PGROUNDUP(oldsz);
         for (a = oldsz; a < newsz; a += PGSIZE)
         {
-            mem = try_alloc_user_page();
+            mem = k_pmm.try_alloc_page();
             if (mem == 0)
             {
                 // printfCyan("[vmalloc] alloc page failed, oldsz: %p, newsz: %p\n", oldsz, newsz);

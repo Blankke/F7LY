@@ -1522,44 +1522,6 @@ int ext4_fs_get_inode_dblk_read_run(struct ext4_inode_ref *inode_ref,
         inode_ref, iblock, fblock, false, true);
 }
 
-int ext4_fs_get_inode_dblk_write_run(struct ext4_inode_ref *inode_ref,
-                                    ext4_lblk_t iblock,
-                                    uint32_t max_blocks,
-                                    ext4_fsblk_t *fblock,
-                                    uint32_t *run_blocks)
-{
-    if (inode_ref == nullptr || fblock == nullptr || run_blocks == nullptr || max_blocks == 0)
-        return EINVAL;
-
-    *fblock = 0;
-    *run_blocks = 1;
-#if CONFIG_EXTENT_ENABLE && CONFIG_EXTENTS_ENABLE
-    struct ext4_fs *fs = inode_ref->fs;
-    if (ext4_sb_feature_incom(&fs->sb, EXT4_FINCOM_EXTENTS) &&
-        ext4_inode_has_flag(inode_ref->inode, EXT4_INODE_FLAG_EXTENTS))
-    {
-        // 初始化 extent 的长度字段只有 15 个有效位；在接口边界统一限幅。
-        constexpr uint32_t k_max_initialized_extent_blocks = 1U << 15;
-        const uint32_t request =
-            max_blocks < k_max_initialized_extent_blocks
-                ? max_blocks
-                : k_max_initialized_extent_blocks;
-        uint32_t extent_blocks = 0;
-        const int rc = ext4_extent_get_blocks(
-            inode_ref, iblock, request, fblock, true, &extent_blocks);
-        if (rc != EOK)
-            return rc;
-        if (*fblock == 0 || extent_blocks == 0)
-            return EIO;
-        *run_blocks = extent_blocks;
-        return EOK;
-    }
-#endif
-
-    // 非 extent inode 保持原有逐块语义。
-    return ext4_fs_init_inode_dblk_idx(inode_ref, iblock, fblock);
-}
-
 int ext4_fs_init_inode_dblk_idx(struct ext4_inode_ref *inode_ref, ext4_lblk_t iblock, ext4_fsblk_t *fblock)
 {
     return ext4_fs_get_inode_dblk_idx_internal(inode_ref, iblock, fblock, true, true);
@@ -1804,47 +1766,6 @@ int ext4_fs_append_inode_dblk(struct ext4_inode_ref *inode_ref, ext4_fsblk_t *fb
     *iblock = new_block_idx;
 
     return EOK;
-}
-
-int ext4_fs_append_inode_dblk_run(struct ext4_inode_ref *inode_ref,
-                                 uint32_t max_blocks,
-                                 ext4_fsblk_t *fblock,
-                                 ext4_lblk_t *iblock,
-                                 uint32_t *run_blocks)
-{
-    if (inode_ref == nullptr || fblock == nullptr || iblock == nullptr ||
-        run_blocks == nullptr || max_blocks == 0)
-        return EINVAL;
-
-#if CONFIG_EXTENT_ENABLE && CONFIG_EXTENTS_ENABLE
-    struct ext4_sblock *sb = &inode_ref->fs->sb;
-    if (ext4_sb_feature_incom(sb, EXT4_FINCOM_EXTENTS) &&
-        ext4_inode_has_flag(inode_ref->inode, EXT4_INODE_FLAG_EXTENTS))
-    {
-        const uint64_t inode_size = ext4_inode_get_size(sb, inode_ref->inode);
-        const uint32_t block_size = ext4_sb_get_block_size(sb);
-        *iblock = static_cast<ext4_lblk_t>(
-            (inode_size + block_size - 1) / block_size);
-
-        const int rc = ext4_fs_get_inode_dblk_write_run(
-            inode_ref, *iblock, max_blocks, fblock, run_blocks);
-        if (rc != EOK)
-            return rc;
-
-        const uint64_t reserved_bytes =
-            static_cast<uint64_t>(*run_blocks) * block_size;
-        if (inode_size > UINT64_MAX - reserved_bytes)
-            return EFBIG;
-        ext4_inode_set_size(inode_ref->inode, inode_size + reserved_bytes);
-        inode_ref->dirty = true;
-        return EOK;
-    }
-#endif
-
-    const int rc = ext4_fs_append_inode_dblk(inode_ref, fblock, iblock);
-    if (rc == EOK)
-        *run_blocks = 1;
-    return rc;
 }
 
 void ext4_fs_inode_links_count_inc(struct ext4_inode_ref *inode_ref)

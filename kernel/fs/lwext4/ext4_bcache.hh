@@ -208,14 +208,6 @@ void ext4_bcache_invalidate_buf(struct ext4_bcache *bc, struct ext4_buf *buf);
  * @param   cnt block counts*/
 void ext4_bcache_invalidate_lba(struct ext4_bcache *bc, uint64_t from, uint32_t cnt);
 
-/**
- * 写回并失效范围内已经存在的缓存项。
- * 只遍历 RB-tree 中实际命中的节点，避免连续 direct I/O 对每个逻辑块单独查询。
- */
-int ext4_bcache_flush_and_invalidate_lba(struct ext4_bcache *bc,
-                                         uint64_t from,
-                                         uint32_t cnt);
-
 /**@brief   Find existing buffer from block cache memory.
  *          Unreferenced block allocation is based on LRU
  *          (Last Recently Used) algorithm.

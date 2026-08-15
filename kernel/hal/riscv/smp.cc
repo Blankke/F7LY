@@ -17,9 +17,7 @@ namespace hal::smp
 {
 namespace
 {
-    static_assert(F7LY_SECONDARY_START_TIMEOUT_US > 0);
-    constexpr uint64 k_secondary_start_timeout_us =
-        F7LY_SECONDARY_START_TIMEOUT_US;
+    constexpr uint64 k_secondary_start_timeout_us = 2'000'000ULL;
 
     [[noreturn]] void run_secondary(uint64 hart_id)
     {

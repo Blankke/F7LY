@@ -25,7 +25,6 @@
 #include "asm.hh"
 #include "hal/tlb_shootdown.hh"
 #include "libs/perf_diag.hh"
-#include "trap/loongarch/unaligned.hh"
 // in kernelvec.S, calls kerneltrap().
 extern "C" void kernelvec();
 extern "C" void uservec();
@@ -41,7 +40,7 @@ trap_manager trap_mgr;
 namespace
 {
   // 单核调度使用固定 tick 时间片，确保长时间运行的用户/内核态任务都能被周期性抢占。
-  // 与 RISC-V 保持同一调度语义，降低 CPU 密集阶段的强制切换成本。
+  // 与 RISC-V 保持同一调度语义；减少 rustc CPU 密集阶段的强制切换成本。
   constexpr int k_default_time_slice_ticks = 4;
   constexpr uint32 k_loongarch_ecode_fpu_disabled = 0xf;
   constexpr uint32 k_loongarch_ecode_lsx_disabled = 0x10;
@@ -397,53 +396,13 @@ void trap_manager::usertrap()
   usertrap_page_fault_done:
     ;
   }
-  else if (ecode == 0x9)
-  {
-    // LA264 不像 QEMU 那样直接完成非对齐访存。Linux/StarryOS 会在 ALE
-    // 中模拟普通 load/store；否则评测镜像中的标准 musl BusyBox 会在启动
-    // 阶段被错误地以 SIGSEGV 杀死。
-    const uint64 badv = r_csr_badv();
-    uint32 instruction = r_csr_badi();
-    // LA264 的 ALE 不保证 BADI 填入当前指令，实机观测值可能为 0。
-    // 此时从已经保存的用户 ERA 读取指令；不能把 BADI=0 误判成不支持。
-    if (instruction == 0 &&
-        mem::k_vmm.copy_in(*p->get_pagetable(),
-                           &instruction,
-                           p->_trapframe->era,
-                           sizeof(instruction)) < 0)
-    {
-      boardPrintfInfo("[trap] user ALE instruction fetch failed pid=%d era=%p badv=%p\n",
-                      p->_pid,
-                      p->_trapframe->era,
-                      badv);
-      p->add_signal(proc::ipc::signal::SIGSEGV);
-    }
-    else
-    {
-      const auto result = loongarch::unaligned::emulate_user_access(*p, badv, instruction);
-      if (result != loongarch::unaligned::Result::Complete)
-      {
-        boardPrintfInfo("[trap] user ALE failed pid=%d era=%p badv=%p badi=%x result=%d\n",
-                        p->_pid,
-                        r_csr_era(),
-                        badv,
-                        instruction,
-                        static_cast<int>(result));
-        // 地址不可访问属于内存错误；合法地址上的未知/不可模拟对齐访问
-        // 按 Linux 同步异常语义报告 SIGBUS，而不是统一伪装成 SIGSEGV。
-        const int signal = result == loongarch::unaligned::Result::MemoryFault
-                               ? proc::ipc::signal::SIGSEGV
-                               : proc::ipc::signal::SIGBUS;
-        p->add_signal(signal);
-      }
-    }
-  }
-  else if (ecode == 0x8)
+  else if (ecode == 0x8 || ecode == 0x9)
   {
     // LoongArch 手册：
     //   ecode=0x8, esubcode=0 => ADEF（取指地址错误）
     //   ecode=0x8, esubcode=1 => ADEM（访存地址错误）
-    // ADEF/ADEM 不是“缺页可补”的场景，直接按用户态同步地址错误送信号。
+    //   ecode=0x9            => ALE（地址对齐错误）
+    // 这些都不是“缺页可补”的场景，直接按用户态同步地址错误送信号。
     printfRed("usertrap(): address error pid=%d ecode=%u esubcode=%u era=%p badv=%p badi=%x\n",
               p->_pid, ecode, esubcode, r_csr_era(), r_csr_badv(), r_csr_badi());
     printfYellow("usertrap(): address-error regs ra=%p sp=%p fp=%p s0=%p s1=%p s2=%p s3=%p s4=%p t0=%p t1=%p a0=%p a1=%p a2=%p\n",

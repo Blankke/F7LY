@@ -53,22 +53,9 @@ namespace proc
             return mem::k_pmm.retain_page(page_pa_to_kernel_ptr(pa));
         }
 
-        constexpr uint32 k_user_page_reclaim_batch = 256;
-
-        inline void *try_alloc_user_page(bool zero_initialize = true)
+        inline void fill_zero_page(void *page)
         {
-            void *page = zero_initialize
-                             ? mem::PhysicalMemoryManager::try_alloc_page()
-                             : mem::PhysicalMemoryManager::try_alloc_page_uninitialized();
-            if (page != nullptr)
-            {
-                return page;
-            }
-
-            file_page_cache::reclaim_clean_pages(k_user_page_reclaim_batch);
-            return zero_initialize
-                       ? mem::PhysicalMemoryManager::try_alloc_page()
-                       : mem::PhysicalMemoryManager::try_alloc_page_uninitialized();
+            mem::k_pmm.clear_page(page);
         }
 
         inline int signal_sigbus_for_current_task(VmPageView &view)
@@ -131,13 +118,15 @@ namespace proc
             return found->second;
         }
 
-        void *page = try_alloc_user_page();
+        void *page = mem::PhysicalMemoryManager::try_alloc_page();
         if (page == nullptr)
         {
             return 0;
         }
-        // try_alloc_user_page() 返回的普通页已经清零；参数保留对象接口语义。
-        (void)zero_fill;
+        if (zero_fill)
+        {
+            fill_zero_page(page);
+        }
         source_pages_[key] = reinterpret_cast<uint64>(page);
         return reinterpret_cast<uint64>(page);
     }
@@ -154,7 +143,7 @@ namespace proc
                                                    size_t copy_bytes,
                                                    bool zero_fill_tail)
     {
-        void *page = try_alloc_user_page();
+        void *page = mem::PhysicalMemoryManager::try_alloc_page();
         if (page == nullptr)
         {
             return 0;
@@ -168,6 +157,11 @@ namespace proc
                 memset(reinterpret_cast<char *>(page) + copy_bytes, 0, PGSIZE - copy_bytes);
             }
         }
+        else
+        {
+            fill_zero_page(page);
+        }
+
         if (area.private_page_overlay == nullptr)
         {
             area.private_page_overlay = new VmPrivateOverlayMap();
@@ -601,7 +595,9 @@ namespace proc
 
                 if (candidate_pa == 0)
                 {
-                    void *page = try_alloc_user_page(!full_file_page);
+                    void *page = full_file_page
+                                     ? mem::PhysicalMemoryManager::try_alloc_page_uninitialized()
+                                     : mem::PhysicalMemoryManager::try_alloc_page();
                     if (page == nullptr)
                     {
                         return -1;
@@ -730,11 +726,12 @@ namespace proc
                     return signal_sigbus_for_current_task(view);
                 }
 
-                void *page = try_alloc_user_page();
+                void *page = mem::PhysicalMemoryManager::try_alloc_page();
                 if (page == nullptr)
                 {
                     return -1;
                 }
+                fill_zero_page(page);
                 uint64 candidate_pa = reinterpret_cast<uint64>(page);
 
                 SpinLockGuard guard(object_lock_);

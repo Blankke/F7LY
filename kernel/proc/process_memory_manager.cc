@@ -23,9 +23,6 @@
 #include "hal/arch.hh"
 #include "memlayout.hh"
 #include "mem/kernel_image.hh"
-#ifdef LOONGARCH
-#include "mem/loongarch/page.hh"
-#endif
 #include "fs/vfs/file/normal_file.hh"
 #include "fs/vfs/vfs_utils.hh"
 #include "fs/vfs/virtual_fs.hh"
@@ -46,23 +43,10 @@ namespace proc
         constexpr uint64 k_mmap_min_base = 0x10000000ULL;
         constexpr uint64 k_mmap_guard_gap = 16 * PGSIZE;
         constexpr uint64 k_mmap_upper_guard = 256 * PGSIZE;
-        constexpr uint32 k_user_page_reclaim_batch = 256;
         constexpr uint32 k_file_invalidation_registry_capacity = num_process;
         inline uint32 max_reasonable_file_refcnt()
         {
             return num_process * max_open_files;
-        }
-
-        inline void *try_alloc_user_page()
-        {
-            void *page = mem::PhysicalMemoryManager::try_alloc_page();
-            if (page != nullptr)
-            {
-                return page;
-            }
-
-            file_page_cache::reclaim_clean_pages(k_user_page_reclaim_batch);
-            return mem::PhysicalMemoryManager::try_alloc_page();
         }
 
         struct FileInvalidationMmRegistry
@@ -1352,7 +1336,7 @@ namespace proc
             }
 
             // has_resident_pages 的 false 是“整段没有叶子映射”的强保证。
-            // 用户态分配器会保留很大的惰性文件映射与匿名地址区；fork 无需为它们
+            // Rust/LLVM 会保留很大的惰性文件映射与匿名地址区；fork 无需为它们
             // 逐页 walk，也无需在 LoongArch 子页表中提前建立空层级。
             if (!entry.has_resident_pages)
             {
@@ -2008,19 +1992,23 @@ namespace proc
             return false;
         }
 
-        // LoongArch 的 tlbr refill 入口要求最后一级页表页预先存在。同一张末级
-        // 页表覆盖完整的 dir1 区间；每个覆盖区只需 walk 一次即可建立相同骨架，
-        // 避免大块稀疏地址预留对每个 4 KiB 用户页重复四级遍历。
-        constexpr uint64 k_leaf_table_coverage =
-            1ULL << mem::PageEnum::dir1_vpn_shift;
+        // LoongArch 的 tlbr refill 入口要求最后一级页表页预先存在，但同一张
+        // 4 KiB 页表覆盖 512 个用户页（2 MiB）。逐 4 KiB walk 会让 Rust/LLVM
+        // 的大块 PROT_NONE arena 和 QEMU RAM 预留白做数万次四级遍历；每个
+        // 2 MiB 覆盖区只需 walk 一次即可建立相同骨架。
+        constexpr uint64 k_leaf_table_coverage = 512ULL * PGSIZE;
         uint64 va = range_start;
         while (va < range_end)
         {
             mem::Pte pte_slot = pagetable.walk(va, true);
             if (pte_slot.is_null())
             {
+                // 大型编译刚结束时 clean 文件页缓存可能仍持有大量只读页。
+                // 页表骨架只差少量物理页时优先回收缓存并重试，避免 QEMU
+                // 在建立 guest RAM 映射前直接把暂时性压力报告为 ENOMEM。
+                constexpr uint32 k_pagetable_oom_reclaim_pages = 256;
                 const uint32 reclaimed =
-                    file_page_cache::reclaim_clean_pages(k_user_page_reclaim_batch);
+                    file_page_cache::reclaim_clean_pages(k_pagetable_oom_reclaim_pages);
                 pte_slot = pagetable.walk(va, true);
                 if (pte_slot.is_null())
                 {
@@ -2320,21 +2308,21 @@ namespace proc
                 return true;
             }
 
-            void *page = try_alloc_user_page();
-            if (page == nullptr)
+            void *mem = mem::PhysicalMemoryManager::try_alloc_page();
+            if (mem == nullptr)
             {
                 return false;
             }
+            mem::k_pmm.clear_page(mem);
 
 #ifdef RISCV
             uint64 flags = PTE_W | PTE_R | PTE_U;
 #elif defined(LOONGARCH)
             uint64 flags = PTE_P | PTE_R | PTE_W | PTE_U | PTE_MAT | PTE_D;
 #endif
-            if (!mem::k_vmm.map_pages(pagetable, page_va, PGSIZE,
-                                      reinterpret_cast<uint64>(page), flags))
+            if (!mem::k_vmm.map_pages(pagetable, page_va, PGSIZE, (uint64)mem, flags))
             {
-                mem::k_pmm.free_page(page);
+                mem::k_pmm.free_page(mem);
                 return false;
             }
             return true;

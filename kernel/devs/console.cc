@@ -64,16 +64,9 @@ namespace dev
       k_uart.put_char_sync(' ');
       k_uart.put_char_sync('\b');
     }
-    else if (c == '\n')
+    else if (c == '\n' || c == '\r')
     {
-      // 串口终端的 LF 只下移光标，不会回到行首。内核日志统一输出 CRLF，
-      // 否则连续打印后会逐行向右漂移，最终只剩屏幕最右侧一列。
-      const u8 newline[] = {'\r', '\n'};
-      k_uart.put_chars_sync(newline, sizeof(newline));
-    }
-    else if (c == '\r')
-    {
-      k_uart.put_char_sync('\r');
+      k_uart.put_char('\n');
     }
     else
     {
