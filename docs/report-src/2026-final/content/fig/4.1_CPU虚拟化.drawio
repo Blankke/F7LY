@@ -1,0 +1,77 @@
+<mxfile host="app.diagrams.net" agent="ChatGPT">
+  <diagram id="4.1_CPU_虚拟化" name="4.1 CPU 虚拟化">
+    <mxGraphModel dx="1220" dy="792" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="900" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="r4" parent="1" style="swimlane;startSize=42;rounded=1;whiteSpace=wrap;html=1;fillColor=#d5f7fb;strokeColor=#6c8ebf;strokeWidth=2;opacity=90;dashed=1;dashPattern=10 8;fontFamily=Comic Sans MS;fontSize=17;fontStyle=1;container=1;collapsible=0;" value="CPU 拓扑与调度" vertex="1">
+          <mxGeometry height="320" width="700" x="60" y="110" as="geometry" />
+        </mxCell>
+        <mxCell id="v5" parent="r4" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;strokeWidth=2;fontFamily=Comic Sans MS;fontSize=17;align=center;verticalAlign=middle;sketch=1;curveFitting=1;jiggle=2;dashed=1;dashPattern=8 6;" value="&lt;b&gt;DTB / CPU(hart)&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;color: rgb(68, 68, 68);&quot;&gt;统一识别 QEMU 与真板&lt;/font&gt;" vertex="1">
+          <mxGeometry height="86" width="170" x="30" y="70" as="geometry" />
+        </mxCell>
+        <mxCell id="v6" parent="r4" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;strokeWidth=2;fontFamily=Comic Sans MS;fontSize=17;align=center;verticalAlign=middle;sketch=1;curveFitting=1;jiggle=2;dashed=1;dashPattern=8 6;" value="&lt;b&gt;possible / online mask&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;color: rgb(68, 68, 68);&quot;&gt;只把 online CPU 交给调度与 IPI&lt;/font&gt;" vertex="1">
+          <mxGeometry height="86" width="190" x="255" y="70" as="geometry" />
+        </mxCell>
+        <mxCell id="v7" parent="r4" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5f7fb;strokeColor=#6c8ebf;strokeWidth=2;fontFamily=Comic Sans MS;fontSize=17;align=center;verticalAlign=middle;sketch=1;curveFitting=1;jiggle=2;dashed=1;dashPattern=8 6;" value="&lt;b&gt;调度器&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;color: rgb(68, 68, 68);&quot;&gt;依据 mask 选择可运行 CPU&lt;/font&gt;" vertex="1">
+          <mxGeometry height="86" width="150" x="500" y="70" as="geometry" />
+        </mxCell>
+        <mxCell id="v8" parent="r4" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;strokeWidth=2;fontFamily=Comic Sans MS;fontSize=17;align=center;verticalAlign=middle;sketch=1;curveFitting=1;jiggle=2;dashed=1;dashPattern=8 6;" value="&lt;b&gt;CPU affinity&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;color: rgb(68, 68, 68);&quot;&gt;亲和性也基于 CPU mask&lt;/font&gt;" vertex="1">
+          <mxGeometry height="80" width="170" x="130" y="208" as="geometry" />
+        </mxCell>
+        <mxCell id="v9" parent="r4" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;strokeWidth=2;fontFamily=Comic Sans MS;fontSize=17;align=center;verticalAlign=middle;sketch=1;curveFitting=1;jiggle=2;dashed=1;dashPattern=8 6;" value="&lt;b&gt;/proc/cpuinfo / sys/cpu&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;color: rgb(68, 68, 68);&quot;&gt;用户态 CPU 信息也由 online / possible 生成&lt;/font&gt;" vertex="1">
+          <mxGeometry height="96" width="240" x="370" y="200" as="geometry" />
+        </mxCell>
+        <mxCell id="e10" edge="1" parent="1" source="v5" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#1f4e79;strokeWidth=3;endArrow=block;endFill=1;fontFamily=Comic Sans MS;sketch=1;curveFitting=1;jiggle=2;fontSize=17;" target="v6" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e11" edge="1" parent="1" source="v6" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#1f4e79;strokeWidth=3;endArrow=block;endFill=1;fontFamily=Comic Sans MS;sketch=1;curveFitting=1;jiggle=2;fontSize=17;" target="v7" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e12" edge="1" parent="1" source="v6" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#1f4e79;strokeWidth=3;endArrow=block;endFill=1;fontFamily=Comic Sans MS;sketch=1;curveFitting=1;jiggle=2;fontSize=17;" target="v8" value="">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="410" y="286" />
+              <mxPoint x="275" y="286" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e13" edge="1" parent="1" source="v6" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#1f4e79;strokeWidth=3;endArrow=block;endFill=1;fontFamily=Comic Sans MS;sketch=1;curveFitting=1;jiggle=2;fontSize=17;" target="v9" value="">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="410" y="286" />
+              <mxPoint x="550" y="286" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="r14" parent="1" style="swimlane;startSize=42;rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;strokeWidth=2;opacity=90;dashed=1;dashPattern=10 8;fontFamily=Comic Sans MS;fontSize=18;fontStyle=1;container=1;collapsible=0;" value="每核本地资源" vertex="1">
+          <mxGeometry height="300" width="700" x="840" y="110" as="geometry" />
+        </mxCell>
+        <mxCell id="v15" parent="r14" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5f7fb;strokeColor=#6c8ebf;strokeWidth=2;fontFamily=Comic Sans MS;fontSize=18;align=center;verticalAlign=middle;sketch=1;curveFitting=1;jiggle=2;dashed=1;dashPattern=8 6;" value="&lt;b&gt;per-CPU state&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;color: rgb(68, 68, 68);&quot;&gt;current、irq depth、timeslice 各核独立&lt;/font&gt;" vertex="1">
+          <mxGeometry height="86" width="180" x="45" y="70" as="geometry" />
+        </mxCell>
+        <mxCell id="v16" parent="r14" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;strokeWidth=2;fontFamily=Comic Sans MS;fontSize=18;align=center;verticalAlign=middle;sketch=1;curveFitting=1;jiggle=2;dashed=1;dashPattern=8 6;" value="&lt;b&gt;per-CPU PLIC&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;color: rgb(68, 68, 68);&quot;&gt;claim / complete 绑定当前 CPU context&lt;/font&gt;" vertex="1">
+          <mxGeometry height="86" width="180" x="270" y="70" as="geometry" />
+        </mxCell>
+        <mxCell id="v17" parent="r14" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;strokeWidth=2;fontFamily=Comic Sans MS;fontSize=18;align=center;verticalAlign=middle;sketch=1;curveFitting=1;jiggle=2;dashed=1;dashPattern=8 6;" value="&lt;b&gt;per-CPU allocator&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;color: rgb(68, 68, 68);&quot;&gt;减少高频页 / 对象分配争用&lt;/font&gt;" vertex="1">
+          <mxGeometry height="86" width="170" x="495" y="70" as="geometry" />
+        </mxCell>
+        <mxCell id="v18" parent="r14" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;strokeWidth=2;fontFamily=Comic Sans MS;fontSize=18;align=center;verticalAlign=middle;sketch=1;curveFitting=1;jiggle=2;dashed=1;dashPattern=8 6;" value="&lt;b&gt;CPU0 / CPU1 ...&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;color: rgb(68, 68, 68);&quot;&gt;各核本地状态分别维护&lt;/font&gt;" vertex="1">
+          <mxGeometry height="80" width="210" x="160" y="200" as="geometry" />
+        </mxCell>
+        <mxCell id="v19" parent="r14" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;strokeWidth=2;fontFamily=Comic Sans MS;fontSize=18;align=center;verticalAlign=middle;sketch=1;curveFitting=1;jiggle=2;dashed=1;dashPattern=8 6;" value="&lt;b&gt;调度 / 中断 / 分配&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;color: rgb(68, 68, 68);&quot;&gt;都在 CPU 粒度上拆分&lt;/font&gt;" vertex="1">
+          <mxGeometry height="80" width="200" x="410" y="200" as="geometry" />
+        </mxCell>
+        <mxCell id="e20" edge="1" parent="1" source="v15" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#1f4e79;strokeWidth=3;endArrow=block;endFill=1;fontFamily=Comic Sans MS;sketch=1;curveFitting=1;jiggle=2;fontSize=18;" target="v18" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e21" edge="1" parent="1" source="v16" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#1f4e79;strokeWidth=3;endArrow=block;endFill=1;fontFamily=Comic Sans MS;sketch=1;curveFitting=1;jiggle=2;fontSize=18;" target="v19" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e22" edge="1" parent="1" source="v17" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#1f4e79;strokeWidth=3;endArrow=block;endFill=1;fontFamily=Comic Sans MS;sketch=1;curveFitting=1;jiggle=2;fontSize=18;" target="v19" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

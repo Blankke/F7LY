@@ -1,0 +1,89 @@
+<mxfile host="app.diagrams.net" agent="ChatGPT">
+  <diagram id="4.4_锁拆分" name="4.4 锁拆分与死锁规避">
+    <mxGraphModel dx="1830" dy="1188" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="900" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="t3" parent="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontFamily=Comic Sans MS;fontSize=30;fontColor=#222222;fontStyle=1;" value="锁拆分、锁顺序与死锁规避" vertex="1">
+          <mxGeometry height="50" width="720" x="440" y="20" as="geometry" />
+        </mxCell>
+        <mxCell id="r4" parent="1" style="swimlane;startSize=42;rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#1f4e79;strokeWidth=2;opacity=25;dashed=1;dashPattern=10 8;fontFamily=Comic Sans MS;fontSize=24;fontStyle=1;container=1;collapsible=0;sketch=1;curveFitting=1;jiggle=2;" value="按对象 / 路径拆锁" vertex="1">
+          <mxGeometry height="420" width="1470" x="70" y="110" as="geometry" />
+        </mxCell>
+        <mxCell id="SmYZqnNxDbD11JpNGCYc-1" edge="1" parent="r4" source="v5" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;sketch=1;jiggle=2;curveFitting=1;strokeColor=#1f4e79;strokeWidth=3;align=center;verticalAlign=middle;fontFamily=Comic Sans MS;fontSize=11;fontColor=default;labelBackgroundColor=default;endArrow=block;endFill=1;" target="v9">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="v5" parent="r4" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;strokeWidth=2;fontFamily=Comic Sans MS;fontSize=24;align=center;verticalAlign=middle;sketch=1;curveFitting=1;jiggle=2;dashed=1;dashPattern=8 6;" value="&lt;b&gt;多核并发安全&lt;/b&gt;" vertex="1">
+          <mxGeometry height="88" width="280" x="550" y="70" as="geometry" />
+        </mxCell>
+        <mxCell id="v6" parent="r4" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;strokeWidth=2;fontFamily=Comic Sans MS;fontSize=22;align=center;verticalAlign=middle;sketch=1;curveFitting=1;jiggle=2;dashed=1;dashPattern=8 6;" value="&lt;b&gt;PCB lock&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:16px;color:#444444&quot;&gt;wait / reparent 等进程路径&lt;/font&gt;" vertex="1">
+          <mxGeometry height="92" width="190" x="60" y="185" as="geometry" />
+        </mxCell>
+        <mxCell id="v7" parent="r4" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;strokeWidth=2;fontFamily=Comic Sans MS;fontSize=22;align=center;verticalAlign=middle;sketch=1;curveFitting=1;jiggle=2;dashed=1;dashPattern=8 6;" value="&lt;b&gt;futex bucket lock&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:16px;color:#444444&quot;&gt;双 bucket 按编号顺序取锁&lt;/font&gt;" vertex="1">
+          <mxGeometry height="92" width="210" x="300" y="185" as="geometry" />
+        </mxCell>
+        <mxCell id="v9" parent="r4" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5f7fb;strokeColor=#6c8ebf;strokeWidth=2;fontFamily=Comic Sans MS;fontSize=22;align=center;verticalAlign=middle;sketch=1;curveFitting=1;jiggle=2;dashed=1;dashPattern=8 6;" value="&lt;b&gt;ext4 metadata / cache&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:16px;color:#444444&quot;&gt;元数据锁与 cache lock 拆分&lt;/font&gt;" vertex="1">
+          <mxGeometry height="92" width="210" x="860" y="185" as="geometry" />
+        </mxCell>
+        <mxCell id="v10" parent="r4" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;strokeWidth=2;fontFamily=Comic Sans MS;fontSize=22;align=center;verticalAlign=middle;sketch=1;curveFitting=1;jiggle=2;dashed=1;dashPattern=8 6;" value="&lt;b&gt;mm / VMA / object&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:16px;color:#444444&quot;&gt;缺页、COW、mmap 等地址空间路径&lt;/font&gt;" vertex="1">
+          <mxGeometry height="92" width="220" x="1130" y="185" as="geometry" />
+        </mxCell>
+        <mxCell id="e12" edge="1" parent="1" source="v5" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#1f4e79;strokeWidth=3;endArrow=block;endFill=1;fontFamily=Comic Sans MS;sketch=1;curveFitting=1;jiggle=2;" target="v6" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e13" edge="1" parent="1" source="v5" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#1f4e79;strokeWidth=3;endArrow=block;endFill=1;fontFamily=Comic Sans MS;sketch=1;curveFitting=1;jiggle=2;" target="v7" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e14" edge="1" parent="1" source="v5" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#1f4e79;strokeWidth=3;endArrow=block;endFill=1;fontFamily=Comic Sans MS;sketch=1;curveFitting=1;jiggle=2;" target="v8" value="">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="770" y="280.03" />
+              <mxPoint x="900" y="280.03" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e16" edge="1" parent="1" source="v5" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#1f4e79;strokeWidth=3;endArrow=block;endFill=1;fontFamily=Comic Sans MS;sketch=1;curveFitting=1;jiggle=2;" target="v10" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e17" edge="1" parent="1" source="v5" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#1f4e79;strokeWidth=3;endArrow=block;endFill=1;fontFamily=Comic Sans MS;sketch=1;curveFitting=1;jiggle=2;" target="v11" value="">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="770" y="280" />
+              <mxPoint x="620" y="280" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="r18" parent="1" style="swimlane;startSize=42;rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;strokeWidth=2;opacity=90;dashed=1;dashPattern=10 8;fontFamily=Comic Sans MS;fontSize=24;fontStyle=1;container=1;collapsible=0;" value="锁顺序约束" vertex="1">
+          <mxGeometry height="190" width="1310" x="145" y="550" as="geometry" />
+        </mxCell>
+        <mxCell id="v19" parent="r18" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;strokeWidth=2;fontFamily=Comic Sans MS;fontSize=21;align=center;verticalAlign=middle;sketch=1;curveFitting=1;jiggle=2;dashed=1;dashPattern=8 6;" value="&lt;b&gt;bucket 顺序取锁&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:15px;color:#444444&quot;&gt;避免 A 等 B、B 等 A&lt;/font&gt;" vertex="1">
+          <mxGeometry height="82" width="240" x="50" y="72" as="geometry" />
+        </mxCell>
+        <mxCell id="v20" parent="r18" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;strokeWidth=2;fontFamily=Comic Sans MS;fontSize=21;align=center;verticalAlign=middle;sketch=1;curveFitting=1;jiggle=2;dashed=1;dashPattern=8 6;" value="&lt;b&gt;pipe 锁内不触发缺页&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:15px;color:#444444&quot;&gt;减少与 mm / fs 锁嵌套反转&lt;/font&gt;" vertex="1">
+          <mxGeometry height="82" width="255" x="345" y="72" as="geometry" />
+        </mxCell>
+        <mxCell id="v21" parent="r18" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;strokeWidth=2;fontFamily=Comic Sans MS;fontSize=21;align=center;verticalAlign=middle;sketch=1;curveFitting=1;jiggle=2;dashed=1;dashPattern=8 6;" value="&lt;b&gt;先改页表再 shootdown&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:15px;color:#444444&quot;&gt;PTE 更新顺序固定&lt;/font&gt;" vertex="1">
+          <mxGeometry height="82" width="240" x="655" y="72" as="geometry" />
+        </mxCell>
+        <mxCell id="v22" parent="r18" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5f7fb;strokeColor=#6c8ebf;strokeWidth=2;fontFamily=Comic Sans MS;fontSize=21;align=center;verticalAlign=middle;sketch=1;curveFitting=1;jiggle=2;dashed=1;dashPattern=8 6;" value="&lt;b&gt;ack 后回收跨核对象&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:15px;color:#444444&quot;&gt;避免其他 CPU 仍引用旧状态&lt;/font&gt;" vertex="1">
+          <mxGeometry height="82" width="260" x="950" y="72" as="geometry" />
+        </mxCell>
+        <mxCell id="e23" edge="1" parent="1" source="v19" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#1f4e79;strokeWidth=3;endArrow=block;endFill=1;fontFamily=Comic Sans MS;sketch=1;curveFitting=1;jiggle=2;" target="v20" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e24" edge="1" parent="1" source="v20" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#1f4e79;strokeWidth=3;endArrow=block;endFill=1;fontFamily=Comic Sans MS;sketch=1;curveFitting=1;jiggle=2;" target="v21" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e25" edge="1" parent="1" source="v21" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#1f4e79;strokeWidth=3;endArrow=block;endFill=1;fontFamily=Comic Sans MS;sketch=1;curveFitting=1;jiggle=2;" target="v22" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="v11" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;strokeWidth=2;fontFamily=Comic Sans MS;fontSize=22;align=center;verticalAlign=middle;sketch=1;curveFitting=1;jiggle=2;dashed=1;dashPattern=8 6;" value="&lt;b&gt;per-CPU state&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:16px;color:#444444&quot;&gt;当前线程、时间片等状态按 CPU 维护&lt;/font&gt;" vertex="1">
+          <mxGeometry height="92" width="260" x="490" y="420" as="geometry" />
+        </mxCell>
+        <mxCell id="v8" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;strokeWidth=2;fontFamily=Comic Sans MS;fontSize=22;align=center;verticalAlign=middle;sketch=1;curveFitting=1;jiggle=2;dashed=1;dashPattern=8 6;" value="&lt;b&gt;file lock / fd-object&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:16px;color:#444444&quot;&gt;普通文件、fd 表、pipe 各自维护状态&lt;/font&gt;" vertex="1">
+          <mxGeometry height="92" width="230" x="840" y="430" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
