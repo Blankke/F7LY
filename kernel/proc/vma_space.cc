@@ -46,7 +46,7 @@ namespace proc
         vma area = {};
         area.used = 1;
         area.addr = addr;
-        area.len = static_cast<int>(length);
+        area.len = length;
         area.prot = prot;
         area.flags = flags;
         area.owner_mm = owner_mm_;
@@ -195,7 +195,7 @@ namespace proc
     {
         if (!left.valid_range() || !right.valid_range() ||
             left.end_addr() != right.addr ||
-            static_cast<uint64>(left.len) + static_cast<uint64>(right.len) > 0x7fffffffULL ||
+            left.len > UINT64_MAX - right.len ||
             left.owner_mm != owner_mm_ || right.owner_mm != owner_mm_)
         {
             return false;
@@ -226,12 +226,13 @@ namespace proc
                left.wipe_on_fork == right.wipe_on_fork &&
                left.zero_fill_past_file == right.zero_fill_past_file &&
                left.debug_name == right.debug_name &&
-               left.max_len == right.max_len &&
-               left.is_expandable == right.is_expandable &&
-               left.file_backed_bytes == 0 && right.file_backed_bytes == 0 &&
-               left.page_offset + static_cast<uint64>(left.len) == right.page_offset &&
-               static_cast<uint64>(left.offset) + static_cast<uint64>(left.len) ==
-                   static_cast<uint64>(right.offset);
+            left.max_len == right.max_len &&
+            left.is_expandable == right.is_expandable &&
+            left.file_backed_bytes == 0 && right.file_backed_bytes == 0 &&
+            left.page_offset <= UINT64_MAX - left.len &&
+            left.offset <= UINT64_MAX - left.len &&
+            left.page_offset + left.len == right.page_offset &&
+            left.offset + left.len == right.offset;
     }
 
     bool VMASpace::merge_private_anonymous(vma &left, vma &right)
@@ -241,7 +242,7 @@ namespace proc
             return false;
         }
 
-        const int old_len = left.len;
+        const uint64 old_len = left.len;
         const bool old_has_resident_pages = left.has_resident_pages;
         erase_area(left, left.addr);
         erase_area(right, right.addr);

@@ -60,10 +60,12 @@ private:
     int allocate_from_node(int index, int depth, uint32 actual_pages);
     bool free_from_node(int index, int depth, int target_offset);
     uint32 max_free_block_pages_from_node(int index, uint32 block_pages) const;
-    uint64 free_page_count_from_node(int index, uint32 block_pages) const;
 
     uint32 page_count;
     uint32 capacity_pages;
+    // 所有 Alloc()/Free() 都在上层 allocator 锁内完成，直接维护实际空闲页数。
+    // 读取方因此无需在大内存机器上递归扫描整棵 buddy 树。
+    uint64 free_page_count_;
     int level;
     uint8* tree;
     uint8* base_ptr;

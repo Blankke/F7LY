@@ -11,7 +11,7 @@
 #   KERNEL_ELF_OVERRIDE=/abs/kernel  运行指定内核，便于和基线 worktree 对比。
 #   SOURCE_IMAGE_OVERRIDE=/abs/img   使用指定评测镜像。
 #   GUEST_SCRIPT_OVERRIDE=/abs/file  写入其它 guest 诊断入口。
-#   PROBE_MODE=xtask|formal|progress|teardown|filecache|perf-smoke
+#   PROBE_MODE=xtask|formal|progress|teardown|qemu-ram|free-count|filecache|perf-smoke
 #                                      选择预设工作负载，默认 xtask。
 #   PERF_DIAG=1                     构建独立的 *-perf 诊断内核。
 #   SKIP_CAGENT=1                   定向调试时跳过 CAgent，默认保留官方顺序。
@@ -53,10 +53,12 @@ case "${PROBE_MODE}" in
     formal) DEFAULT_GUEST_SCRIPT="scripts/run/buildstorm_formal_profile_guest.sh" ;;
     progress) DEFAULT_GUEST_SCRIPT="scripts/run/buildstorm_progress_guest.sh" ;;
     teardown) DEFAULT_GUEST_SCRIPT="scripts/run/mm_teardown_bench_guest.sh" ;;
+    qemu-ram) DEFAULT_GUEST_SCRIPT="scripts/run/qemu_ram_reserve_guest.sh" ;;
+    free-count) DEFAULT_GUEST_SCRIPT="scripts/run/free_page_count_bench_guest.sh" ;;
     filecache) DEFAULT_GUEST_SCRIPT="scripts/run/file_page_cache_bench_guest.sh" ;;
     perf-smoke) DEFAULT_GUEST_SCRIPT="scripts/run/f7ly_perf_smoke_guest.sh" ;;
     *)
-        echo "PROBE_MODE 必须是 xtask、formal、progress、teardown、filecache 或 perf-smoke" >&2
+        echo "PROBE_MODE 必须是 xtask、formal、progress、teardown、qemu-ram、free-count、filecache 或 perf-smoke" >&2
         exit 2
         ;;
 esac
@@ -67,7 +69,7 @@ SOURCE_IMAGE="${SOURCE_IMAGE_OVERRIDE:-${SOURCE_IMAGE}}"
 GUEST_SCRIPT="${GUEST_SCRIPT_OVERRIDE:-${DEFAULT_GUEST_SCRIPT}}"
 if [[ "${PROBE_MODE}" == "formal" ]]; then
     HOST_TIMEOUT="${HOST_TIMEOUT:-60m}"
-elif [[ "${PROBE_MODE}" == "teardown" || "${PROBE_MODE}" == "filecache" ]]; then
+elif [[ "${PROBE_MODE}" == "teardown" || "${PROBE_MODE}" == "qemu-ram" || "${PROBE_MODE}" == "free-count" || "${PROBE_MODE}" == "filecache" ]]; then
     HOST_TIMEOUT="${HOST_TIMEOUT:-20m}"
 elif [[ "${PROBE_MODE}" == "perf-smoke" ]]; then
     HOST_TIMEOUT="${HOST_TIMEOUT:-10m}"
@@ -213,7 +215,7 @@ fi
 
 echo "[4/4] 性能摘要"
 tr '\r' '\n' <"${LOG_PATH}" |
-    rg 'BUILDSTORM_(PERF_(BEGIN|T\\+|END)|PROGRESS|PROFILE|COMPILE|FORMAL_RESULT)|MM_TEARDOWN_(SAMPLE|RESULT|PERF_(BEGIN|END))|FILE_CACHE_(ROUND|TRUNCATE|RESULT|PERF_(BEGIN|END))|PERF_SMOKE_(BEGIN|PMU|ERROR|RESULT)|panic: |shootdown timeout' |
+    rg 'BUILDSTORM_(PERF_(BEGIN|T\\+|END)|PROGRESS|PROFILE|COMPILE|FORMAL_RESULT)|MM_TEARDOWN_(SAMPLE|RESULT|PERF_(BEGIN|END))|QEMU_RAM_RESERVE_(SAMPLE|RESULT)|FREE_PAGE_COUNT_RESULT|FILE_CACHE_(ROUND|TRUNCATE|RESULT|PERF_(BEGIN|END))|PERF_SMOKE_(BEGIN|PMU|ERROR|RESULT)|panic: |shootdown timeout' |
     tail -n 80 || true
 echo "日志: ${LOG_PATH}"
 echo "宿主 CPU 采样: ${HOST_CPU_LOG_PATH}"
@@ -230,12 +232,14 @@ if grep -aF 'shootdown timeout' "${LOG_PATH}" >/dev/null; then
     PROBE_STATUS=4
 fi
 
-# 正式、teardown、filecache 与 perf-smoke 都有唯一的结构化终态。QEMU 正常关机并不
+# 正式、teardown、qemu-ram、free-count、filecache 与 perf-smoke 都有唯一的结构化终态。QEMU 正常关机并不
 # 表示 guest 测试成功，因此必须独立拒绝缺失、重复或 ok=false 的结果。
 RESULT_PREFIX=""
 case "${PROBE_MODE}" in
     formal) RESULT_PREFIX="BUILDSTORM_FORMAL_RESULT" ;;
     teardown) RESULT_PREFIX="MM_TEARDOWN_RESULT" ;;
+    qemu-ram) RESULT_PREFIX="QEMU_RAM_RESERVE_RESULT" ;;
+    free-count) RESULT_PREFIX="FREE_PAGE_COUNT_RESULT" ;;
     filecache) RESULT_PREFIX="FILE_CACHE_RESULT" ;;
     perf-smoke) RESULT_PREFIX="PERF_SMOKE_RESULT" ;;
 esac

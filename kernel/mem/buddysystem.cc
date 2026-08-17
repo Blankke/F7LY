@@ -53,6 +53,7 @@ namespace mem
         tree = reinterpret_cast<uint8 *>(tree_storage);
         level = 0;
         capacity_pages = capacity_pages_for(page_count);
+        free_page_count_ = page_count;
         while ((1u << level) < capacity_pages)
             level++;
         const uint64 max_nodes = required_tree_bytes(page_count);
@@ -296,6 +297,12 @@ namespace mem
         {
             panic("[BuddySystem] Alloc produced invalid offset=%d (page_count=%d)", offset, page_count);
         }
+        if (free_page_count_ < actual_pages)
+        {
+            panic("[BuddySystem] free-page counter underflow: free=%lu alloc=%u",
+                  free_page_count_, actual_pages);
+        }
+        free_page_count_ -= actual_pages;
         return offset;
     }
 
@@ -309,10 +316,20 @@ namespace mem
             printfRed("[BuddySystem] Freeing invalid page offset=%d (page_count=%d)\n", offset, page_count);
             return;
         }
-        if (!free_from_node(0, 0, offset))
+        const PageQueryResult block = query_page(static_cast<uint32>(offset));
+        if (!block.in_range || block.is_free ||
+            block.block_offset != static_cast<uint32>(offset) ||
+            !free_from_node(0, 0, offset))
         {
             printfRed("[BuddySystem] Freeing unknown page offset=%d\n", offset);
+            return;
         }
+        if (free_page_count_ > static_cast<uint64>(page_count) - block.block_pages)
+        {
+            panic("[BuddySystem] free-page counter overflow: free=%lu release=%u total=%u",
+                  free_page_count_, block.block_pages, page_count);
+        }
+        free_page_count_ += block.block_pages;
     }
 
     void *BuddySystem::alloc_pages(int count)
@@ -357,23 +374,6 @@ namespace mem
         return left > right ? left : right;
     }
 
-    uint64 BuddySystem::free_page_count_from_node(int index, uint32 block_pages) const
-    {
-        uint8 state = tree[index];
-        if (state == NODE_UNUSED)
-        {
-            return block_pages;
-        }
-        if (state == NODE_USED || state == NODE_FULL || block_pages == 0)
-        {
-            return 0;
-        }
-
-        uint32 child_block_pages = block_pages / 2;
-        return free_page_count_from_node(index * 2 + 1, child_block_pages) +
-               free_page_count_from_node(index * 2 + 2, child_block_pages);
-    }
-
     uint32 BuddySystem::get_max_free_block_pages() const
     {
         return max_free_block_pages_from_node(0, capacity_pages);
@@ -381,7 +381,7 @@ namespace mem
 
     uint64 BuddySystem::get_free_page_count() const
     {
-        return free_page_count_from_node(0, capacity_pages);
+        return free_page_count_;
     }
 
     BuddySystem::PageQueryResult BuddySystem::query_page(uint32 page_offset) const

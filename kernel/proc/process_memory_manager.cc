@@ -501,12 +501,12 @@ namespace proc
             {
                 return false;
             }
-            if (entry.len <= 0)
+            if (entry.len == 0)
             {
                 return false;
             }
             uint64 start = entry.addr;
-            uint64 end = start + (uint64)entry.len;
+            uint64 end = start + entry.len;
             if (end <= start)
             {
                 return false;
@@ -833,7 +833,7 @@ namespace proc
 
             if (!entry.valid_range())
             {
-                printfRed("ProcessMemoryManager: rebuild_vma_index skip invalid slot=%d addr=%p len=%d used=%d\n",
+                printfRed("ProcessMemoryManager: rebuild_vma_index skip invalid slot=%d addr=%p len=%lu used=%d\n",
                           i, (void *)entry.addr, entry.len, entry.used);
                 continue;
             }
@@ -1072,8 +1072,12 @@ namespace proc
             }
 
             uint64 grow_len = candidate->addr - page_va;
-            uint64 new_len = static_cast<uint64>(candidate->len) + grow_len;
-            if (!candidate->is_expandable || new_len > candidate->max_len || new_len > 0x7fffffffULL)
+            if (candidate->len > UINT64_MAX - grow_len)
+            {
+                return -1;
+            }
+            uint64 new_len = candidate->len + grow_len;
+            if (!candidate->is_expandable || new_len > candidate->max_len)
             {
                 return -1;
             }
@@ -1115,11 +1119,11 @@ namespace proc
             }
 
             candidate->addr = page_va;
-            candidate->len = static_cast<int>(new_len);
+            candidate->len = new_len;
             if (!reindex_vma_slot(*candidate, old_addr))
             {
                 candidate->addr = old_addr;
-                candidate->len = static_cast<int>(new_len - grow_len);
+                candidate->len = new_len - grow_len;
                 delete shifted_overlay;
                 return -1;
             }
@@ -1336,20 +1340,18 @@ namespace proc
             }
 
             // has_resident_pages 的 false 是“整段没有叶子映射”的强保证。
-            // Rust/LLVM 会保留很大的惰性文件映射与匿名地址区；fork 无需为它们
-            // 逐页 walk，也无需在 LoongArch 子页表中提前建立空层级。
+            // 大型用户态分配器会保留很大的惰性文件映射与匿名地址区；fork
+            // 无需为它们逐页 walk，也无需在需要预建骨架的架构上制造空层级。
             if (!entry.has_resident_pages)
             {
                 return true;
             }
 
-#ifdef LOONGARCH
             if (!dst.ensure_user_pagetable_hierarchy(entry.addr, static_cast<uint64>(entry.len)))
             {
                 copy_ok = false;
                 return false;
             }
-#endif
 
             if (entry.object != nullptr && entry.object->shared_mapping())
             {
@@ -1369,7 +1371,7 @@ namespace proc
                                                  &rollback_ranges);
             if (copy_result < 0)
             {
-                printfRed("[clone_private_vm_space_for_fork] copy area failed kind=%d addr=%p len=%d name=%s\n",
+                printfRed("[clone_private_vm_space_for_fork] copy area failed kind=%d addr=%p len=%lu name=%s\n",
                           static_cast<int>(entry.area_kind),
                           (void *)entry.addr,
                           entry.len,
@@ -1560,7 +1562,7 @@ namespace proc
 
             if (!is_reasonable_user_vma(vma_data._vm[i]))
             {
-                printfRed("[clone_for_fork] skip invalid VMA %d addr=%p len=%d flags=0x%x prot=0x%x\n",
+                printfRed("[clone_for_fork] skip invalid VMA %d addr=%p len=%lu flags=0x%x prot=0x%x\n",
                           i,
                           (void *)vma_data._vm[i].addr,
                           vma_data._vm[i].len,
@@ -1581,14 +1583,12 @@ namespace proc
                 continue;
             }
 
-#ifdef LOONGARCH
             if (!new_mgr->ensure_user_pagetable_hierarchy(new_mgr->vma_data._vm[i].addr,
                                                           new_mgr->vma_data._vm[i].len))
             {
                 cleanup_failed_clone();
                 return nullptr;
             }
-#endif
 
             // fork 必须保留父进程已经驻留的私有 VMA 页。
             // 动态链接器会在 MAP_PRIVATE 的 libc/ld.so GOT 页上写入重定位结果；
@@ -1609,7 +1609,7 @@ namespace proc
                 uint64 vma_end = PGROUNDUP(vma_data._vm[i].addr + (uint64)vma_data._vm[i].len);
                 if (vma_end < vma_start)
                 {
-                    printfRed("[clone_for_fork] skip overflow VMA copy %d addr=%p len=%d\n",
+                    printfRed("[clone_for_fork] skip overflow VMA copy %d addr=%p len=%lu\n",
                               i, (void *)vma_data._vm[i].addr, vma_data._vm[i].len);
                     continue;
                 }
@@ -1622,7 +1622,7 @@ namespace proc
                                                      &cow_rollback_ranges);
                 if (copy_result < 0)
                 {
-                    printfRed("[clone_for_fork] copy VMA %d failed addr=%p len=%d\n",
+                    printfRed("[clone_for_fork] copy VMA %d failed addr=%p len=%lu\n",
                               i, (void *)vma_data._vm[i].addr, vma_data._vm[i].len);
                     cleanup_failed_clone();
                     return nullptr;
@@ -1993,22 +1993,73 @@ namespace proc
         }
 
         // LoongArch 的 tlbr refill 入口要求最后一级页表页预先存在，但同一张
-        // 4 KiB 页表覆盖 512 个用户页（2 MiB）。逐 4 KiB walk 会让 Rust/LLVM
-        // 的大块 PROT_NONE arena 和 QEMU RAM 预留白做数万次四级遍历；每个
-        // 2 MiB 覆盖区只需 walk 一次即可建立相同骨架。
+        // 4 KiB 页表覆盖 512 个用户页（2 MiB）。每个覆盖区只需 walk 一次。
         constexpr uint64 k_leaf_table_coverage = 512ULL * PGSIZE;
+
+        /*
+         * 大范围匿名预留只消耗页表骨架。低内存时先为整次操作准备足够的
+         * 空闲页，避免分配到一半才失败并把部分骨架留在地址空间里。只有
+         * 当前空闲页低于最坏上界时才扫描缺失 leaf，正常 mmap 不增加第二遍 walk。
+         */
+        auto covered_spans = [](uint64 begin, uint64 end, uint64 coverage) -> uint64 {
+            return end <= begin ? 0 : (end - 1) / coverage - begin / coverage + 1;
+        };
+        const uint64 leaf_spans =
+            covered_spans(range_start, range_end, k_leaf_table_coverage);
+        // LoongArch 当前使用 4 KiB/四级/每级 9 bit 页表：上两级新页分别
+        // 覆盖 1 GiB 和 512 GiB 用户区间。
+        constexpr uint64 k_level2_coverage = 1ULL << 30;
+        constexpr uint64 k_level3_coverage = 1ULL << 39;
+        const uint64 upper_level_pages =
+            covered_spans(range_start, range_end, k_level2_coverage) +
+            covered_spans(range_start, range_end, k_level3_coverage);
+        constexpr uint64 k_hierarchy_reserve_pages = 64;
+        uint64 free_pages = mem::k_pmm.get_free_page_count();
+        if (free_pages < leaf_spans + upper_level_pages + k_hierarchy_reserve_pages)
+        {
+            uint64 missing_leaf_spans = 0;
+            for (uint64 probe = range_start; probe < range_end;)
+            {
+                if (pagetable.walk(probe, false).is_null())
+                {
+                    ++missing_leaf_spans;
+                }
+                const uint64 next =
+                    (probe + k_leaf_table_coverage) & ~(k_leaf_table_coverage - 1);
+                if (next <= probe)
+                {
+                    return false;
+                }
+                probe = next;
+            }
+
+            uint64 target_free_pages = missing_leaf_spans + upper_level_pages;
+            if (target_free_pages <= UINT64_MAX - k_hierarchy_reserve_pages)
+            {
+                target_free_pages += k_hierarchy_reserve_pages;
+            }
+            else
+            {
+                target_free_pages = UINT64_MAX;
+            }
+            if (free_pages < target_free_pages)
+            {
+                file_page_cache::reclaim_clean_pages_until(target_free_pages,
+                                                           UINT32_MAX);
+            }
+        }
+
         uint64 va = range_start;
         while (va < range_end)
         {
             mem::Pte pte_slot = pagetable.walk(va, true);
             if (pte_slot.is_null())
             {
-                // 大型编译刚结束时 clean 文件页缓存可能仍持有大量只读页。
-                // 页表骨架只差少量物理页时优先回收缓存并重试，避免 QEMU
-                // 在建立 guest RAM 映射前直接把暂时性压力报告为 ENOMEM。
-                constexpr uint32 k_pagetable_oom_reclaim_pages = 256;
+                // 并发分配可能消耗预留水位；失败时按真实 PMM 空闲数继续驱逐，
+                // 而不是只摘固定 256 个仍可能被其它 owner 引用的 cache 条目。
                 const uint32 reclaimed =
-                    file_page_cache::reclaim_clean_pages(k_pagetable_oom_reclaim_pages);
+                    file_page_cache::reclaim_clean_pages_until(k_hierarchy_reserve_pages,
+                                                               UINT32_MAX);
                 pte_slot = pagetable.walk(va, true);
                 if (pte_slot.is_null())
                 {
@@ -2179,12 +2230,13 @@ namespace proc
                 prev->area_kind == VmAreaKind::Heap &&
                 prev->end_addr() == cursor)
             {
-                uint64 new_len = static_cast<uint64>(prev->len) + (run_end - cursor);
-                if (new_len > 0x7fffffffULL)
+                const uint64 added_len = run_end - cursor;
+                if (prev->len > UINT64_MAX - added_len)
                 {
                     return false;
                 }
-                prev->len = static_cast<int>(new_len);
+                uint64 new_len = prev->len + added_len;
+                prev->len = new_len;
                 prev->prot = PROT_READ | PROT_WRITE;
                 prev->flags = MAP_PRIVATE | MAP_ANONYMOUS;
                 prev->grow_policy = VmGrowPolicy::Up;
@@ -2196,11 +2248,6 @@ namespace proc
             else
             {
                 uint64 run_len = run_end - cursor;
-                if (run_len > 0x7fffffffULL)
-                {
-                    return false;
-                }
-
                 vma *heap_area = vm_space.create_area(cursor,
                                                        run_len,
                                                        PROT_READ | PROT_WRITE,
@@ -2271,7 +2318,7 @@ namespace proc
                 }
                 else
                 {
-                    entry->len = static_cast<int>(new_end - entry->addr);
+                    entry->len = new_end - entry->addr;
                     entry->has_resident_pages = true;
                 }
 
@@ -2479,7 +2526,7 @@ namespace proc
 
         if (!is_reasonable_user_vma(vm_entry))
         {
-            printfRed("ProcessMemoryManager: VMA 元数据异常，跳过页表释放并直接丢弃该条目 addr=%p len=%d legacy=%d\n",
+            printfRed("ProcessMemoryManager: VMA 元数据异常，跳过页表释放并直接丢弃该条目 addr=%p len=%lu legacy=%d\n",
                       (void *)vm_entry.addr,
                       vm_entry.len,
                       legacy_index >= 0 ? 1 : 0);
@@ -3518,18 +3565,18 @@ namespace proc
         {
             if (vma_data._vm[i].used)
             {
-                printfCyan("  VMA %d: %p - %p (%u bytes, prot=%d, flags=%d)\n",
+                printfCyan("  VMA %d: %p - %p (%lu bytes, prot=%d, flags=%d)\n",
                            i,
                            (void *)vma_data._vm[i].addr,
                            (void *)(vma_data._vm[i].addr + vma_data._vm[i].len),
-                           (uint32)vma_data._vm[i].len,
+                           vma_data._vm[i].len,
                            vma_data._vm[i].prot,
                            vma_data._vm[i].flags);
                 vma_total += vma_data._vm[i].len;
                 active_vmas++;
             }
         }
-        printfCyan("Total VMA usage: %u bytes (%d active VMAs)\n", (uint32)vma_total, active_vmas);
+        printfCyan("Total VMA usage: %lu bytes (%d active VMAs)\n", vma_total, active_vmas);
 
         // 页表信息
         if (pagetable.get_base())

@@ -118,14 +118,12 @@ namespace proc
             return found->second;
         }
 
-        void *page = mem::PhysicalMemoryManager::try_alloc_page();
+        void *page = zero_fill
+                         ? mem::PhysicalMemoryManager::try_alloc_page()
+                         : mem::PhysicalMemoryManager::try_alloc_page_uninitialized();
         if (page == nullptr)
         {
             return 0;
-        }
-        if (zero_fill)
-        {
-            fill_zero_page(page);
         }
         source_pages_[key] = reinterpret_cast<uint64>(page);
         return reinterpret_cast<uint64>(page);
@@ -143,7 +141,12 @@ namespace proc
                                                    size_t copy_bytes,
                                                    bool zero_fill_tail)
     {
-        void *page = mem::PhysicalMemoryManager::try_alloc_page();
+        // 完整页复制会覆盖每个字节，可以跳过分配器清零；匿名页或部分复制
+        // 继续使用零页契约，避免把旧内核数据暴露给用户态。
+        const bool full_page_copy = src != nullptr && copy_bytes == PGSIZE;
+        void *page = full_page_copy
+                         ? mem::PhysicalMemoryManager::try_alloc_page_uninitialized()
+                         : mem::PhysicalMemoryManager::try_alloc_page();
         if (page == nullptr)
         {
             return 0;
@@ -157,11 +160,6 @@ namespace proc
                 memset(reinterpret_cast<char *>(page) + copy_bytes, 0, PGSIZE - copy_bytes);
             }
         }
-        else
-        {
-            fill_zero_page(page);
-        }
-
         if (area.private_page_overlay == nullptr)
         {
             area.private_page_overlay = new VmPrivateOverlayMap();
@@ -731,7 +729,6 @@ namespace proc
                 {
                     return -1;
                 }
-                fill_zero_page(page);
                 uint64 candidate_pa = reinterpret_cast<uint64>(page);
 
                 SpinLockGuard guard(object_lock_);

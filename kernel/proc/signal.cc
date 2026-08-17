@@ -167,7 +167,7 @@ namespace
         }
 
         uint64 vm_start = vm->addr;
-        uint64 vm_end = vm->addr + (uint64)vm->len;
+        uint64 vm_end = vm->end_addr();
         if (aligned_end > vm_end || aligned_start >= vm_start)
         {
             return false;
@@ -186,19 +186,18 @@ namespace
 
         // 信号帧只允许把当前用户栈向下补齐少量页面，避免把真正的 guard/其他映射吞掉。
         uint64 grow_size = vm_start - aligned_start;
-        if (grow_size > 8 * PGSIZE ||
-            (uint64)vm->len + grow_size > 0x7fffffffULL)
+        if (grow_size > 8 * PGSIZE || vm->len > UINT64_MAX - grow_size)
         {
             return false;
         }
 
         uint64 old_addr = vm->addr;
         vm->addr = aligned_start;
-        vm->len += (int)grow_size;
+        vm->len += grow_size;
         if (!p->get_memory_manager()->reindex_vma_slot(*vm, old_addr))
         {
             vm->addr = old_addr;
-            vm->len -= (int)grow_size;
+            vm->len -= grow_size;
             return false;
         }
 

@@ -313,26 +313,36 @@ namespace proc::file_page_cache
                 return 0;
             }
 
-            CacheEntry *garbage = nullptr;
             uint32 detached = 0;
-            for (uint32 index = 0;
-                 index < k_shard_count && detached < max_pages;
-                 ++index)
+            while (detached < max_pages)
             {
-                PageShard &shard = cache_state().page_shards[index];
-                shard.lock.acquire();
-                while (shard.lru_tail != nullptr && detached < max_pages)
+                CacheEntry *garbage = nullptr;
+                uint32 round_detached = 0;
+                for (uint32 index = 0;
+                     index < k_shard_count && detached < max_pages;
+                     ++index)
                 {
-                    detach_entry_locked(shard, shard.lru_tail, garbage);
-                    ++detached;
-                    if ((detached & 3U) == 0)
+                    PageShard &shard = cache_state().page_shards[index];
+                    shard.lock.acquire();
+                    uint32 shard_detached = 0;
+                    while (shard.lru_tail != nullptr &&
+                           detached < max_pages && shard_detached < 4)
                     {
-                        break;
+                        detach_entry_locked(shard, shard.lru_tail, garbage);
+                        ++detached;
+                        ++round_detached;
+                        ++shard_detached;
                     }
+                    shard.lock.release();
                 }
-                shard.lock.release();
+                // 释放物理页和 CacheEntry 时不持 shard 锁；每轮最多 256 项，
+                // 既允许大规模回收继续推进，也避免长时间囤积 garbage 链表。
+                release_garbage(garbage, true);
+                if (round_detached == 0)
+                {
+                    break;
+                }
             }
-            release_garbage(garbage, true);
             return detached;
         }
 
@@ -757,6 +767,28 @@ namespace proc::file_page_cache
     {
         ensure_budget();
         return reclaim_lru_pages(max_pages);
+    }
+
+    uint32 reclaim_clean_pages_until(uint64 min_free_pages, uint32 max_pages)
+    {
+        ensure_budget();
+        uint32 evicted = 0;
+        constexpr uint32 k_reclaim_check_batch = 256;
+        while (evicted < max_pages &&
+               mem::k_pmm.get_free_page_count() < min_free_pages)
+        {
+            const uint32 remaining = max_pages - evicted;
+            const uint32 batch = remaining < k_reclaim_check_batch
+                                     ? remaining
+                                     : k_reclaim_check_batch;
+            const uint32 reclaimed = reclaim_lru_pages(batch);
+            evicted += reclaimed;
+            if (reclaimed == 0)
+            {
+                break;
+            }
+        }
+        return evicted;
     }
 
     void readahead_16_pages(fs::file *file,

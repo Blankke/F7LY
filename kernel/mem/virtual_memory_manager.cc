@@ -1097,7 +1097,15 @@ namespace mem
         if (vf != nullptr && vm->vfd != -1)
         {
             // 文件映射：需要检查是否访问超出文件大小的区域
-            int offset = vm->offset + (page_va - vm->addr);
+            const uint64 page_delta = page_va - vm->addr;
+            if (vm->offset > UINT64_MAX - page_delta)
+            {
+                printfRed("[allocate_vma_page] file offset overflow: base=%lu delta=%lu\n",
+                          vm->offset, page_delta);
+                k_pmm.free_page(pa);
+                return -1;
+            }
+            const uint64 offset = vm->offset + page_delta;
 
             // 获取文件实际大小
             fs::Kstat st;
@@ -1110,9 +1118,9 @@ namespace mem
                 return size_result;
             }
             // 检查访问是否超出文件大小
-            if (offset >= (int)file_size)
+            if (offset >= file_size)
             {
-                printfRed("[allocate_vma_page] access beyond file size: offset=%d, file_size=%lu for %s\n",
+                printfRed("[allocate_vma_page] access beyond file size: offset=%lu, file_size=%lu for %s\n",
                           offset, file_size, vf->_path_name.c_str());
                 k_pmm.free_page(pa);
                 // 访问超出文件大小，应该产生SIGBUS信号
@@ -1122,7 +1130,13 @@ namespace mem
             }
 
             // 从文件读取数据
-            int readbytes = vf->read((uint64)pa, PGSIZE, offset, false);
+            if (offset > static_cast<uint64>(LONG_MAX))
+            {
+                k_pmm.free_page(pa);
+                return -1;
+            }
+            int readbytes = vf->read((uint64)pa, PGSIZE,
+                                     static_cast<long>(offset), false);
             if (readbytes < 0)
             {
                 printfRed("[allocate_vma_page] file read failed\n");

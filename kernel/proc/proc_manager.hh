@@ -89,8 +89,8 @@ namespace proc
         long sbrk(long increment);
         
         // 内存映射相关
-        int validate_mmap_params(void *addr, size_t length, int prot, int flags, int fd, int offset);
-        void *mmap(void *addr, size_t length, int prot, int flags, int fd, int offset, int *errno);
+        int validate_mmap_params(void *addr, size_t length, int prot, int flags, int fd, uint64 offset);
+        void *mmap(void *addr, size_t length, int prot, int flags, int fd, uint64 offset, int *errno);
         int munmap(void *addr, size_t length);
         int mremap(void *old_address, size_t old_size, size_t new_size, int flags, void *new_address, void **result_addr);
 

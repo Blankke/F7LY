@@ -5083,7 +5083,7 @@ namespace proc
     /// @param fd 文件描述符
     /// @param offset 偏移量
     /// @return 0表示有效，负数表示错误码
-    int ProcessManager::validate_mmap_params(void *addr, size_t length, int prot, int flags, int fd, int offset)
+    int ProcessManager::validate_mmap_params(void *addr, size_t length, int prot, int flags, int fd, uint64 offset)
     {
 
         // 检查匿名映射
@@ -5114,7 +5114,7 @@ namespace proc
         // 长度检查
         if (length <= 0)
         {
-            printfRed("[mmap] Invalid length: %d\n", length);
+            printfRed("[mmap] Invalid length: %lu\n", static_cast<uint64>(length));
             return syscall::SYS_EINVAL;
         }
 
@@ -5159,7 +5159,8 @@ namespace proc
             uint64 pages_for_offset = offset / PGSIZE;
             if (pages_for_length + pages_for_offset > UINT32_MAX / PGSIZE)
             {
-                printfRed("[mmap] Length and offset overflow: length=%d, offset=%d\n", length, offset);
+                printfRed("[mmap] Length and offset overflow: length=%lu, offset=%lu\n",
+                          static_cast<uint64>(length), offset);
                 return syscall::SYS_EOVERFLOW;
             }
         }
@@ -5206,7 +5207,7 @@ namespace proc
     /// @param offset 文件偏移量
     /// @param errno 错误码输出参数
     /// @return 成功返回映射地址，失败返回MAP_FAILED
-    void *ProcessManager::mmap(void *addr, size_t length, int prot, int flags, int fd, int offset, int *errno)
+    void *ProcessManager::mmap(void *addr, size_t length, int prot, int flags, int fd, uint64 offset, int *errno)
     {
         // 初始化错误码
         if (errno != nullptr)
@@ -5392,7 +5393,7 @@ namespace proc
         // 检查映射大小是否超过虚拟地址空间限制
         if (aligned_length > MAXVA - PGSIZE)
         {
-            printfRed("[mmap] Mapping size %u exceeds virtual address space\n", aligned_length);
+            printfRed("[mmap] Mapping size %lu exceeds virtual address space\n", aligned_length);
             return fail_mmap(ENOMEM);
         }
 
@@ -5431,9 +5432,10 @@ namespace proc
             map_addr = (uint64)addr;
 
             // 检查MAP_FIXED地址边界
-            if (map_addr < PGSIZE || map_addr + aligned_length > MAXVA - PGSIZE)
+            if (map_addr < PGSIZE ||
+                map_addr > MAXVA - PGSIZE - aligned_length)
             {
-                printfRed("[mmap] MAP_FIXED address out of bounds: addr=%p, len=%u\n",
+                printfRed("[mmap] MAP_FIXED address out of bounds: addr=%p, len=%lu\n",
                           (void *)map_addr, aligned_length);
                 return fail_mmap(ENOMEM);
             }
@@ -5497,18 +5499,15 @@ namespace proc
                 map_addr = mm->reserve_mmap_region(aligned_length);
                 if (map_addr == 0)
                 {
-                    printfRed("[mmap] Failed to reserve virtual address range, len=%d\n", aligned_length);
+                    printfRed("[mmap] Failed to reserve virtual address range, len=%lu\n", aligned_length);
                     return fail_mmap(ENOMEM);
                 }
             }
 
         }
 
-#ifdef LOONGARCH
-        // LoongArch 的 TLB refill 入口假定目标虚拟地址的页表层级已经存在。
-        // mmap 仅记录 VMA、把叶子页留给后续缺页惰性分配时，如果这里完全不预建页表层级，
-        // 首次访问高地址匿名/文件映射时会直接沿着空层级走出诡异的 ADEM。
-        // RISC-V 的缺页路径可以按需创建页表层级，避免在 lat_mmap 里为每次映射逐页预建。
+        // 上层始终通过同一入口准备地址范围。具体架构可以选择按需建页表，
+        // 也可以因硬件 refill 契约而预建骨架，但 mmap 的成功/失败语义保持一致。
         ProcessMemoryManager *const hierarchy_mm = p->get_memory_manager();
         if (hierarchy_mm == nullptr ||
             !hierarchy_mm->ensure_user_pagetable_hierarchy(map_addr, aligned_length))
@@ -5518,7 +5517,6 @@ namespace proc
                       (void *)(map_addr + aligned_length));
             return fail_mmap(ENOMEM);
         }
-#endif
 
         bool populated_mapping_pages = false;
         ProcessMemoryManager *memory_mgr = p->get_memory_manager();
@@ -5536,19 +5534,20 @@ namespace proc
         {
             vma *existing = memory_mgr->find_prev_vma(map_addr + 1);
             if (existing != nullptr &&
-                existing->addr + (uint64)existing->len == map_addr &&
+                existing->end_addr() == map_addr &&
+                existing->len <= UINT64_MAX - aligned_length &&
                 existing->prot == prot &&
                 existing->flags == flags &&
                 existing->vfd == -1 &&
                 existing->vfile == nullptr &&
                 existing->backing_kind == VMA_BACKING_NONE)
             {
-                const int old_len = existing->len;
+                const uint64 old_len = existing->len;
                 const uint64 old_max_len = existing->max_len;
-                existing->len += static_cast<int>(aligned_length);
-                if (existing->max_len < static_cast<uint64>(existing->len))
+                existing->len += aligned_length;
+                if (existing->max_len < existing->len)
                 {
-                    existing->max_len = static_cast<uint64>(existing->len);
+                    existing->max_len = existing->len;
                 }
                 /*
                  * Maple Tree 节点缓存了区间终点。只改 vma::len 会让新增尾部
@@ -5942,12 +5941,12 @@ namespace proc
                 return;
             }
             fs::Kstat st{};
-            if (fs::k_vfs.fstat(entry.vfile, &st) != EOK || static_cast<uint64>(entry.offset) >= st.size)
+            if (fs::k_vfs.fstat(entry.vfile, &st) != EOK || entry.offset >= st.size)
             {
                 entry.file_backed_bytes = 0;
                 return;
             }
-            uint64 bytes_left = st.size - static_cast<uint64>(entry.offset);
+            uint64 bytes_left = st.size - entry.offset;
             uint64 mapped_len = static_cast<uint64>(entry.len);
             entry.file_backed_bytes = bytes_left > mapped_len ? mapped_len : bytes_left;
         };
@@ -6021,12 +6020,7 @@ namespace proc
                 {
                     return syscall::SYS_ENOMEM;
                 }
-                if (aligned_new_size > 0x7fffffffULL)
-                {
-                    return syscall::SYS_ENOMEM;
-                }
-
-                vm->len = static_cast<int>(aligned_new_size);
+                vm->len = aligned_new_size;
                 if (vm->max_len < aligned_new_size)
                 {
                     vm->max_len = aligned_new_size;

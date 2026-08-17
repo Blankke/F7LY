@@ -91,6 +91,13 @@ namespace proc::file_page_cache
      */
     uint32 reclaim_clean_pages(uint32 max_pages);
 
+    /**
+     * 淘汰 clean cache owner，直到 PMM 至少有 min_free_pages 张空闲页、缓存
+     * 已空或达到 max_pages 上限。返回实际摘除的缓存条目数；共享引用仍存活的
+     * 条目可能只降低 refcount，因此实现会按 PMM 的真实空闲页数决定是否继续。
+     */
+    uint32 reclaim_clean_pages_until(uint64 min_free_pages, uint32 max_pages);
+
     /** 一次 I/O 预读连续 16 张完整页；失败仅放弃预读，不影响当前缺页。 */
     void readahead_16_pages(fs::file *file,
                             const fs::FilePageCacheIdentity &identity,

@@ -65,12 +65,14 @@ namespace proc
     {
         int used = 0;
         uint64 addr = 0;
-        int len = 0;
+        // Linux 64 位 ABI 允许单个 mmap 跨过 2 GiB；QEMU 的 guest RAM
+        // 预留会直接使用这种大 VMA，长度不能经过 32 位有符号整数。
+        uint64 len = 0;
         int prot = 0;
         int flags = 0;
         int vfd = -1;
         fs::file *vfile = nullptr;
-        int offset = 0;
+        uint64 offset = 0;
         uint64 max_len = 0;
         bool is_expandable = false;
         int backing_kind = VMA_BACKING_NONE;
@@ -98,12 +100,12 @@ namespace proc
 
         uint64 end_addr() const
         {
-            return addr + static_cast<uint64>(len);
+            return addr + len;
         }
 
         bool valid_range() const
         {
-            return used && len > 0 && end_addr() > addr;
+            return used && len != 0 && end_addr() > addr;
         }
 
         bool covers(uint64 target) const

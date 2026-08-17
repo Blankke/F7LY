@@ -15719,10 +15719,10 @@ namespace syscall
             {
                 proc::vma_meta::discard_overlay_container(target);
                 target.addr = new_addr;
-                target.len = static_cast<int>(new_len);
+                target.len = new_len;
                 target.prot = new_prot;
                 target.page_offset = source_view.page_offset + delta;
-                target.offset = source_view.offset + static_cast<int>(delta);
+                target.offset = source_view.offset + delta;
                 target.file_backed_bytes = segment_file_backed_bytes(source_view, delta, new_len);
                 target.private_page_overlay = overlay;
                 target.owner_mm = mm;
@@ -15776,7 +15776,7 @@ namespace syscall
                 {
                     new_vm->vfile = nullptr;
                 }
-                new_vm->offset = source_view.offset + static_cast<int>(delta);
+                new_vm->offset = source_view.offset + delta;
                 new_vm->max_len = source_view.max_len;
                 new_vm->is_expandable = source_view.is_expandable;
                 new_vm->backing_kind = source_view.backing_kind;
