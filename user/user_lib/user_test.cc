@@ -3933,3 +3933,62 @@ int basic_glibc_test(void)
 {
     return basic_test(glibc_dir);
 }
+
+
+// 路径存在性检测：目录和文件都适用。
+bool path_exists(const char *path)
+{
+    int fd = openat(AT_FDCWD, path, O_RDONLY);
+    if (fd < 0)
+    {
+        return false;
+    }
+    close(fd);
+    return true;
+}
+
+// 决赛两题脚本只存在于决赛盘，初赛盘没有这两个文件，命中任一即判为决赛盘。
+bool is_final_disk()
+{
+    return path_exists("/glibc/cagent_testcode.sh") ||
+           path_exists("/glibc/buildstorm_testcode.sh");
+}
+
+// 初赛盘必备 /musl/busybox（init_env 直接执行它）与 /musl/basic（basic_test
+// 依赖），标准 Debian rootfs 不含这两个路径。
+bool is_preliminary_disk()
+{
+    return path_exists("/musl/busybox") || path_exists("/musl/basic");
+}
+
+void pre_test()
+{
+    init_env("/musl/");
+    libc_test("/musl/");
+    basic_test("/musl/");
+    basic_test("/glibc/");
+    lua_test("/musl/");
+    lua_test("/glibc/");
+    netperf_test("/musl/");
+    netperf_test("/glibc/");
+    iperf_test("/musl/");
+    iperf_test("/glibc/");
+    busybox_test("/musl/");
+    busybox_test("/glibc/");
+    libcbench_test("/musl");
+    libcbench_test("/glibc");
+    iozone_test("/glibc");
+    iozone_test("/musl");
+    cyclictest_test("/musl/");
+    cyclictest_test("/glibc/");
+    ltp_test(false);
+    ltp_test(true);
+    lmbench_test("/musl/");
+    lmbench_test("/glibc/");
+}
+
+void final_test()
+{
+    cagent_test();
+    buildstorm_test();
+}

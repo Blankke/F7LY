@@ -169,6 +169,13 @@ int final_test_glibc(void);
 int cagent_test(void);
 int buildstorm_test(void);
 int git_test(const char *path);
+
+// initcode 入口调度：根据挂载的根文件系统判别初赛盘/决赛盘并分发测试集
+bool path_exists(const char *path);
+bool is_final_disk(void);
+bool is_preliminary_disk(void);
+void pre_test(void);
+void final_test(void);
 int vim_h();
 int gcc_test();
 int rustc_test();

@@ -44,6 +44,17 @@ else
 endif
 QEMU_STORAGE_IMAGE ?= $(QEMU_DEFAULT_STORAGE_IMAGE)
 
+# run 的内存/核数按磁盘套件自动选择：初赛盘负载轻，默认 1 核 1G 即可；
+# 决赛盘保持默认多核（QEMU_MEM/QEMU_SMP）。命令行显式传 QEMU_MEM/QEMU_SMP
+# 时优先使用用户值，兼容旧的覆盖习惯。debug 不受这里影响，仍用 QEMU_SMP。
+ifeq ($(QEMU_DISK),preliminary)
+  QEMU_RUN_MEM ?= $(if $(filter command line,$(origin QEMU_MEM)),$(QEMU_MEM),1G)
+  QEMU_RUN_SMP ?= $(if $(filter command line,$(origin QEMU_SMP)),$(QEMU_SMP),1)
+else
+  QEMU_RUN_MEM ?= $(QEMU_MEM)
+  QEMU_RUN_SMP ?= $(QEMU_SMP)
+endif
+
 ifeq ($(MODE),shell)
   QEMU_CONSOLE_ARGS ?= -display none -chardev stdio,id=shell_stdio,signal=off \
                        -serial chardev:shell_stdio -monitor none
@@ -65,7 +76,8 @@ else
   QEMU_NETWORK_ARGS := -netdev user,id=net -device virtio-net-pci,netdev=net
 endif
 
-QEMU_COMMON_TAIL = $(QEMU_ACCEL) -smp $(QEMU_SMP) $(QEMU_FIRMWARE_ARGS) \
+# 公共尾部不含 -smp：run 按磁盘套件选核数，debug 固定用 QEMU_SMP。
+QEMU_COMMON_TAIL = $(QEMU_ACCEL) $(QEMU_FIRMWARE_ARGS) \
                    $(QEMU_SNAPSHOT) $(QEMU_STORAGE_ARGS) -no-reboot \
                    $(QEMU_NETWORK_ARGS) -rtc base=utc
 
@@ -114,12 +126,12 @@ qemu-run: prepare-image
 	@if [ "$(PROFILE_BOARD)" != "qemu" ]; then \
 		echo "错误：qemu-run 只接受 QEMU 画像"; exit 2; \
 	fi
-	$(QEMU_SYSTEM) -machine virt -kernel $(KERNEL_ELF) -m $(QEMU_MEM) \
-		$(QEMU_COMMON_TAIL) $(QEMU_CONSOLE_ARGS)
+	$(QEMU_SYSTEM) -machine virt -kernel $(KERNEL_ELF) -m $(QEMU_RUN_MEM) \
+		-smp $(QEMU_RUN_SMP) $(QEMU_COMMON_TAIL) $(QEMU_CONSOLE_ARGS)
 
 qemu-debug: prepare-image
 	@if [ "$(PROFILE_BOARD)" != "qemu" ]; then \
 		echo "错误：qemu-debug 只接受 QEMU 画像"; exit 2; \
 	fi
 	$(QEMU_SYSTEM) -machine virt -kernel $(KERNEL_ELF) -m $(QEMU_DEBUG_MEM) \
-		$(QEMU_COMMON_TAIL) -nographic -S -gdb tcp::1234
+		-smp $(QEMU_SMP) $(QEMU_COMMON_TAIL) -nographic -S -gdb tcp::1234
