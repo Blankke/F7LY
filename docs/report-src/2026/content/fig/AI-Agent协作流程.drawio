@@ -1,12 +1,9 @@
 <mxfile host="Electron">
   <diagram id="ai-agent-workflow" name="AI Agent 协作流程">
-    <mxGraphModel dx="2985" dy="1009" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1400" pageHeight="820" background="#ffffff" math="0" shadow="0">
+    <mxGraphModel dx="2258" dy="518" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1400" pageHeight="820" background="#ffffff" math="0" shadow="0">
       <root>
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
-        <mxCell id="title" parent="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontFamily=Comic Sans MS;fontSize=26;fontStyle=1;fontColor=#3d2a78;" value="AI Agent 项目协作 Workflow" vertex="1">
-          <mxGeometry height="50" width="560" x="420" y="40" as="geometry" />
-        </mxCell>
         <mxCell id="prompt-zone" parent="1" style="swimlane;startSize=34;rounded=1;whiteSpace=wrap;html=1;opacity=85;dashed=1;dashPattern=8 8;sketch=1;curveFitting=1;jiggle=2;fontFamily=Comic Sans MS;fontSize=16;fontStyle=1;fillColor=#e1d5e7;strokeColor=#9673a6;container=1;pointerEvents=0;" value="① Prompt 分发 / 项目知识入口" vertex="1">
           <mxGeometry height="210" width="880" x="260" y="110" as="geometry" />
         </mxCell>
@@ -61,8 +58,8 @@
         <mxCell id="agent" parent="work-zone" style="ellipse;whiteSpace=wrap;html=1;fontFamily=Comic Sans MS;fontSize=17;fillColor=#dae8fc;strokeColor=#6c8ebf;strokeWidth=3;shadow=1;sketch=1;curveFitting=1;jiggle=2;" value="🤖&#xa;&lt;b&gt;AI Agent&lt;/b&gt;&#xa;读取上下文 · 作出决策" vertex="1">
           <mxGeometry height="105" width="210" x="215" y="70" as="geometry" />
         </mxCell>
-        <mxCell id="inspect" parent="work-zone" style="rounded=1;whiteSpace=wrap;html=1;fontFamily=Comic Sans MS;fontSize=15;fillColor=#e1d5e7;strokeColor=#9673a6;shadow=1;sketch=1;curveFitting=1;jiggle=2;" value="🔍&#xa;定位 / 分析" vertex="1">
-          <mxGeometry height="75" width="125" x="35" y="85" as="geometry" />
+        <mxCell id="inspect" parent="work-zone" style="rounded=1;whiteSpace=wrap;html=1;fontFamily=Comic Sans MS;fontSize=15;fillColor=#e1d5e7;strokeColor=#9673a6;shadow=1;sketch=1;curveFitting=1;jiggle=2;" value="🔍&lt;br&gt;借鉴/分析" vertex="1">
+          <mxGeometry height="75" width="125" x="35" y="50" as="geometry" />
         </mxCell>
         <mxCell id="implement" parent="work-zone" style="rounded=1;whiteSpace=wrap;html=1;fontFamily=Comic Sans MS;fontSize=15;fillColor=#ffe6cc;strokeColor=#d79b00;shadow=1;sketch=1;curveFitting=1;jiggle=2;" value="⌨&#xa;修改项目代码" vertex="1">
           <mxGeometry height="75" width="125" x="480" y="85" as="geometry" />
@@ -80,7 +77,23 @@
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
         <mxCell id="e10" edge="1" parent="work-zone" source="verify" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=classic;sketch=1;curveFitting=1;jiggle=2;strokeColor=#6c8ebf;fontFamily=Comic Sans MS;fontSize=12;exitX=0;exitY=0.5;entryX=0.5;entryY=1;" target="agent" value="反馈 / 修正">
-          <mxGeometry relative="1" as="geometry" />
+          <mxGeometry relative="1" x="-0.4362" as="geometry">
+            <mxPoint as="offset" />
+            <Array as="points">
+              <mxPoint x="220" y="225" />
+              <mxPoint x="220" y="175" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="ce_fpjGQ_UqCKp79EKxl-1" parent="work-zone" style="rounded=1;whiteSpace=wrap;html=1;fontFamily=Comic Sans MS;fontSize=15;fillColor=#e1d5e7;strokeColor=#9673a6;shadow=1;sketch=1;curveFitting=1;jiggle=2;" value="📄&lt;br&gt;plan_docs&lt;div&gt;任务下发&lt;/div&gt;" vertex="1">
+          <mxGeometry height="75" width="125" x="35" y="150" as="geometry" />
+        </mxCell>
+        <mxCell id="ce_fpjGQ_UqCKp79EKxl-2" edge="1" parent="work-zone" source="ce_fpjGQ_UqCKp79EKxl-1" style="shape=flexArrow;endArrow=classic;html=1;rounded=0;sketch=1;curveFitting=1;jiggle=2;fillColor=#9673a6;strokeColor=#9673a6;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0.033;entryY=0.66;entryDx=0;entryDy=0;entryPerimeter=0;" target="agent" value="">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points" />
+            <mxPoint x="180" y="170" as="sourcePoint" />
+            <mxPoint x="240" y="180" as="targetPoint" />
+          </mxGeometry>
         </mxCell>
         <mxCell id="logs-zone" parent="1" style="swimlane;startSize=34;rounded=1;whiteSpace=wrap;html=1;opacity=85;dashed=1;dashPattern=8 8;sketch=1;curveFitting=1;jiggle=2;fontFamily=Comic Sans MS;fontSize=16;fontStyle=1;fillColor=#fff2cc;strokeColor=#d6b656;container=1;pointerEvents=0;" value="④ 输出统一管理" vertex="1">
           <mxGeometry height="280" width="310" x="1060" y="360" as="geometry" />
@@ -94,11 +107,18 @@
         <mxCell id="build-log" parent="logs-zone" style="rounded=0;whiteSpace=wrap;html=1;fontFamily=Comic Sans MS;fontSize=13;fillColor=#f8cecc;strokeColor=none;shadow=1;" value="构建 / 评测输出" vertex="1">
           <mxGeometry height="48" width="120" x="165" y="180" as="geometry" />
         </mxCell>
-        <mxCell id="human" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fontFamily=Comic Sans MS;fontSize=16;fillColor=#f5f5f5;strokeColor=#666666;shadow=1;sketch=1;curveFitting=1;jiggle=2;" value="👤  AIPM / 开发者&#xa;提出任务 · 审阅结果 · 继续迭代" vertex="1">
+        <mxCell id="human" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fontFamily=Comic Sans MS;fontSize=16;fillColor=#f5f5f5;strokeColor=#666666;shadow=1;sketch=1;curveFitting=1;jiggle=2;" value="👤 开发者&lt;br&gt;提出任务 · 审阅结果 · 继续迭代" vertex="1">
           <mxGeometry height="70" width="400" x="500" y="700" as="geometry" />
         </mxCell>
-        <mxCell id="e5" edge="1" parent="1" source="prompt-zone" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=classic;sketch=1;curveFitting=1;jiggle=2;strokeColor=#9673a6;strokeWidth=2;fontFamily=Comic Sans MS;fontSize=13;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="agent" value="">
-          <mxGeometry relative="1" as="geometry" />
+        <mxCell id="e5" edge="1" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=classic;sketch=1;curveFitting=1;jiggle=2;strokeColor=#9673a6;strokeWidth=2;fontFamily=Comic Sans MS;fontSize=13;entryX=0.5;entryY=0;" target="agent" value="">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="610" y="320" />
+              <mxPoint x="610" y="400" />
+              <mxPoint x="700" y="400" />
+            </Array>
+            <mxPoint x="610" y="320.01" as="sourcePoint" />
+          </mxGeometry>
         </mxCell>
         <mxCell id="e6" edge="1" parent="1" source="reference-zone" style="shape=flexArrow;endArrow=classic;html=1;rounded=0;sketch=1;curveFitting=1;jiggle=2;fillColor=#82b366;strokeColor=#82b366;fontFamily=Comic Sans MS;fontSize=13;" target="inspect" value="">
           <mxGeometry relative="1" as="geometry" />
