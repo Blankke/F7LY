@@ -113,32 +113,26 @@ which python
 
 ## VisionFive2 的 U-Boot 启动契约
 
-`kernel-rv-visionfive2.bin` 的装载地址是 `0x40200000`，文件开头包含 U-Boot `booti` 可识别的标准 RISC-V Linux Image v0.2 头。启动时必须同时传入真实板级 DTB：
+`kernel-rv-visionfive2-shell.bin` 的装载地址是 `0x40200000`，文件开头包含 U-Boot `booti` 可识别的标准 RISC-V Linux Image v0.2 头。当前实机开发循环从 TFTP 搬运内核；已核对过板型的 U-Boot control DTB 先复制到低端 RAM，再按标准 RISC-V ABI 传给内核：
 
-```bash
+```console
+fdt move ${fdtcontroladdr} 0x46000000 0x10000
+setenv fdt_addr_r 0x46000000
 setenv kernel_addr_r 0x40200000
-fatload mmc 1:1 ${kernel_addr_r} kernel-rv-visionfive2.bin
-fatload mmc 1:1 ${fdt_addr_r} <实际的-VisionFive2-DTB-路径>
+tftpboot ${kernel_addr_r} kernel-rv-visionfive2-shell.bin
 booti ${kernel_addr_r} - ${fdt_addr_r}
 ```
 
-VisionFive 2 v1.3B 当前实机使用的等价 U-Boot 环境命令为：
+日常构建、发布、等待 U-Boot、执行上述启动序列并保留交互串口只使用两条命令：
 
-```console
-setenv f7boot 'fatload mmc 1:1 0x40200000 kernel-rv-visionfive2-shell.bin; fatload mmc 1:1 0x46000000 jh7110-starfive-visionfive-2-v1.3b.dtb; booti 0x40200000 - 0x46000000'
-run f7boot
+```sh
+./scripts/board/visionfive2-dev.sh build
+./scripts/board/visionfive2-dev.sh send
 ```
 
-日常构建、复制、自动执行上述启动序列并保留交互串口可使用：
+脚本默认使用板子 `192.168.88.243`、TFTP 主机 `192.168.88.244`、`ethernet@16040000` 和 `/dev/ttyUSB0`，可通过 `BOARD_IP`、`SERVER_IP`、`ETHACT`、`SERIAL_DEVICE`、`TFTP_DIR` 覆盖。`fdt_addr_r` 必须是一段不与内核镜像重叠的 RAM。不要使用旧分支的 `go 0x40200000`：`go` 传入的是 `argc/argv`，而当前内核明确要求标准 RISC-V 启动 ABI `a0=hartid、a1=DTB 物理地址`。
 
-```bash
-BOOT_DIR=/path/to/mounted-fat \
-  ./scripts/board/visionfive2-dev.sh build
-```
-
-其中 `fdt_addr_r` 必须是 U-Boot 环境中一段不与内核镜像重叠的 RAM；DTB 文件名和 FAT 分区路径以实际启动介质为准。不要使用旧分支的 `go 0x40200000`：`go` 传入的是 `argc/argv`，而当前内核明确要求标准 RISC-V 启动 ABI `a0=hartid、a1=DTB 物理地址`。
-
-当前 VF2 存储驱动读取整张 SD 卡，公共块层再识别裸 ext4、MBR 或 GPT；不应把 ext4 分区偏移写回 DWMMC 驱动。
+TFTP 只替代内核搬运。当前 VF2 存储驱动仍从 SD 控制器读取根盘，公共块层再识别裸 ext4、MBR 或 GPT；不应把 ext4 分区偏移写回 DWMMC 驱动。
 
 完整 RISC-V 回归日志：
 

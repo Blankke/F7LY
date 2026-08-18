@@ -5,6 +5,13 @@
 
 namespace riscv::board
 {
+// JH7110 的 hart0 是 E24 管理核，DTB 中只有 M-mode 外部中断 context；
+// F7LY 运行在 U74 的 hart1..4，不能把 hart0 加入 S-mode 调度与 PLIC 拓扑。
+constexpr bool is_schedulable_hart(uint64 hart_id)
+{
+    return hart_id >= 1 && hart_id <= 4;
+}
+
 // VisionFive 2/JH7110 的固定 SoC 资源集中在当前画像。DTB 仍是 CPU、RAM、
 // PLIC context 与 timebase 的运行时权威来源；这里的地址是板级硬件契约。
 inline constexpr platform::MmioRegion k_plic_mmio{

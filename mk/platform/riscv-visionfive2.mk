@@ -12,7 +12,8 @@ PROFILE_CPPFLAGS := -DVISIONFIVE2_IPV4=\"$(VISIONFIVE2_IPV4)\" \
                      -DVISIONFIVE2_NETMASK=\"$(VISIONFIVE2_NETMASK)\" \
                      -DVISIONFIVE2_GATEWAY=\"$(VISIONFIVE2_GATEWAY)\" \
                      -DVISIONFIVE2_DNS=\"$(VISIONFIVE2_DNS)\" \
-                     -DVISIONFIVE2_BROADCAST=\"$(VISIONFIVE2_BROADCAST)\"
+                     -DVISIONFIVE2_BROADCAST=\"$(VISIONFIVE2_BROADCAST)\" \
+                     -DF7LY_RISCV_SATP_SWITCH_FENCE=1
 PROFILE_DIR := kernel/platform/riscv/visionfive2
 PROFILE_LINK_SCRIPT := kernel/link/riscv/visionfive2.ld
 PROFILE_KERNEL_SUFFIX := -visionfive2

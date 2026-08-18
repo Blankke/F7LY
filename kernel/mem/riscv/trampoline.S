@@ -7,8 +7,25 @@
 	#
 	# kernel.ld causes this to be aligned
         # to a page boundary.
-        #
+	#
+#ifndef F7LY_RISCV_SATP_SWITCH_FENCE
+#define F7LY_RISCV_SATP_SWITCH_FENCE 0
+#endif
+
 	.section trampsec
+
+        # 默认依赖 ASID 隔离避免在 trap 热路径全量刷新 TLB。平台若不能稳定
+        # 使用该快路径，可通过画像要求在 satp 切换前后执行本地全量栅栏。
+        .macro switch_satp value
+#if F7LY_RISCV_SATP_SWITCH_FENCE
+        sfence.vma zero, zero
+#endif
+        csrw satp, \value
+#if F7LY_RISCV_SATP_SWITCH_FENCE
+        sfence.vma zero, zero
+#endif
+        .endm
+
 .globl trampoline
 trampoline:
 .align 4
@@ -125,10 +142,7 @@ uservec:
 
         # restore kernel page table from p->trapframe->kernel_satp
         ld t1, 0(a0)
-        # 用户页表使用隔离的非零 ASID，内核页表固定使用 ASID 0。
-        # 地址空间复用前由 ASID 回收池执行全核 sfence，无需在每次 trap
-        # 往返时清空本 hart 全部 TLB。
-        csrw satp, t1
+        switch_satp t1
 
         # a0 is no longer valid, since the kernel page
         # table does not specially map p->tf.
@@ -146,7 +160,7 @@ userret:
         # a2: whether this thread has enabled user FPU state.
 
         # switch to the user page table and its isolated non-zero ASID.
-        csrw satp, a1
+        switch_satp a1
 
         # put the saved user a0 in sscratch, so we
         # can swap it with our a0 (trapframe VA) in the last step.

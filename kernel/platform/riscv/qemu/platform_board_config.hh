@@ -5,6 +5,13 @@
 
 namespace riscv::board
 {
+    // QEMU virt 的 hart 都是同构的 S-mode 应用核，可直接加入调度拓扑。
+    constexpr bool is_schedulable_hart(uint64 hart_id)
+    {
+        (void)hart_id;
+        return true;
+    }
+
     // QEMU virt 的固定资源集中在唯一的平台画像。通用驱动只消费这里的
     // typed region/IRQ，不再从 memlayout.hh 读取设备地址。
     inline constexpr platform::MmioRegion k_uart_mmio{

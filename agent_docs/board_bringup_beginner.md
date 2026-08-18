@@ -21,9 +21,9 @@
 | --- | --- |
 | 1. 编译 `-shell.bin` | 1. 编译 `-shell.bin` |
 | 2. 串口进入 U-Boot | 2. 串口进入 U-Boot |
-| 3. SD 卡准备 FAT + ext4 | 3. SATA 盘准备 ext4 |
-| 4. 找到正确 mmc 分区 | 4. 电脑准备 TFTP |
-| 5. `fatload` 内核和 DTB | 5. 复制并检查 DTB |
+| 3. SD 卡准备 ext4 根盘 | 3. SATA 盘准备 ext4 |
+| 4. 电脑准备 TFTP | 4. 电脑准备 TFTP |
+| 5. 搬移板载 DTB，`tftpboot` 内核 | 5. 复制并检查 DTB |
 | 6. 检查 DTB 的板型 | 6. `tftpboot` 内核 |
 | 7. 用 `booti` 启动 | 7. 用 `go` 启动 |
 | 8. 看到 `F7LY:...$` | 8. 看到 `F7LY:...$` |
@@ -56,7 +56,7 @@
 
 | 板子 | 搬内核的方法 | 最后的启动命令 |
 | --- | --- | --- |
-| VisionFive2 | 从 SD 卡 FAT 分区读取 | `booti` |
+| VisionFive2 | 推荐从 TFTP 网络读取 | `booti` |
 | 2K1000LA | 推荐从 TFTP 网络读取 | `go` |
 
 ### 1.1 九个词的小词典
@@ -380,22 +380,22 @@ echo F7LY_VF2_BOOT_OK
 
 ### 4.7 日常开发循环
 
-第一次手动启动成功后，可以使用与 2K1000LA 对称的脚本完成构建、复制、
-等待 U-Boot、执行 `fatload/booti` 和串口日志记录：
+当前 TFTP 开发循环使用与 2K1000LA 对称的脚本完成构建、发布、等待 U-Boot、
+搬移板载 control DTB、执行 `tftpboot/booti` 和串口日志记录：
 
 ```bash
-BOOT_DIR=/path/to/mounted-fat \
-  ./scripts/board/visionfive2-dev.sh build
+./scripts/board/visionfive2-dev.sh build
 
 # 复用当前 kernel-rv-visionfive2-shell.bin
-BOOT_DIR=/path/to/mounted-fat \
-  ./scripts/board/visionfive2-dev.sh send
+./scripts/board/visionfive2-dev.sh send
 ```
 
-脚本默认使用 `/dev/ttyUSB0`、`mmc 1:1`、`0x40200000`、`0x46000000`
-和 v1.3B DTB 文件名，可用 `SERIAL_DEVICE`、`MMC_DEVICE`、
-`MMC_PARTITION`、`DTB_SOURCE` 等同名环境变量覆盖。日志写入 `logs/run/`，
-最新一份由 `logs/run/output_visionfive2_latest.txt` 指向。
+脚本默认使用板子 `192.168.88.243`、TFTP 主机 `192.168.88.244`、
+`ethernet@16040000`、`/dev/ttyUSB0`、内核地址 `0x40200000` 和 DTB 地址
+`0x46000000`。可用 `BOARD_IP`、`SERVER_IP`、`ETHACT`、`SERIAL_DEVICE`、
+`TFTP_DIR` 覆盖。日志写入 `logs/run/`，最新一份由
+`logs/run/output_visionfive2_latest.txt` 指向。TFTP 只负责内核搬运；当前根文件
+系统仍由板载 SD 控制器读取。
 
 ### 4.8 VisionFive2 卡住时怎么看
 

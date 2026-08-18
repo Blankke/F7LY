@@ -3,6 +3,7 @@
 #include "devs/dtb.hh"
 #include "hal/cpu.hh"
 #include "hal/irq.hh"
+#include "hal/riscv/platform_board.hh"
 #include "hal/riscv/sbi.hh"
 #include "hal/tlb_shootdown.hh"
 #include "mem/virtual_memory_manager.hh"
@@ -101,7 +102,21 @@ void configure_topology()
         hart_count = 1;
     }
 
-    Cpu::configure_topology(hart_ids, hart_count);
+    int schedulable_count = 0;
+    for (int index = 0; index < hart_count; ++index)
+    {
+        const uint64 hart_id = hart_ids[index];
+        if (riscv::board::is_schedulable_hart(hart_id))
+        {
+            hart_ids[schedulable_count++] = hart_id;
+        }
+    }
+    if (schedulable_count == 0)
+    {
+        panic("[smp] DTB has no schedulable RISC-V hart");
+    }
+
+    Cpu::configure_topology(hart_ids, schedulable_count);
 }
 
 void start_secondaries(uint64 boot_argument)

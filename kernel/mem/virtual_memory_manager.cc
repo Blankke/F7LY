@@ -383,12 +383,6 @@ namespace mem
         _virt_mem_lock.init(lock_name);
         // 创建内核页表
         k_pagetable = kvmmake();
-        // 可按链接符号 kernel_start 到 etext 检查内核文本映射。
-        // {
-        //     uint64 ppp= (uint64)k_pagetable.walk_addr(va);
-        //     printfRed("va: %p, pa: %p\n", va, ppp);
-        // }
-        // TODO
         for (proc::Pcb &pcb : proc::k_proc_pool)
         {
             pcb.map_kstack(k_pagetable);
@@ -432,8 +426,6 @@ namespace mem
     // 根据传入的 flags 标志，生成对应的页表权限（perm）值
     bool VirtualMemoryManager::map_pages(PageTable &pt, uint64 va, uint64 size, uint64 pa, uint64 flags)
     {
-        // printf("map_pages: va=0x%x, size=0x%x, pa=0x%x, flags=0x%x\n", va, size, pa, flags);
-
         uint64 a, last;
         Pte pte;
 
@@ -446,14 +438,7 @@ namespace mem
 
         for (;;)
         {
-            // printfMagenta("map_pages: va=0x%x, size=0x%x, pa=0x%x, flags=0x%x\n", a, size, pa, flags);
             pte = pt.walk(a, /*alloc*/ true);
-            // printfCyan("walk: va=0x%x, pte_addr=%p, pte_data=%p\n", a, pte.get_data(), pte.get_data());
-            // DEBUG:
-            //  if(va == mem::kernel_image_start_address())
-            //  {
-            //      pte = pt.walk(a, false);
-            //  }
 
             if (pte.is_null())
             {
@@ -479,20 +464,19 @@ namespace mem
                 panic("mappages: remap, va=0x%x, pa=0x%x, PteData:%x", a, pa, pte.get_data());
             }
 #ifdef RISCV
+            // RISC-V 允许硬件在 A/D 位为零时直接产生页故障，而不是自动置位。
+            // 内核映射没有用户缺页修复路径，因此安装叶子 PTE 时预置两位；
+            // 实际读写权限仍只由调用方传入的 R/W/X 标志决定。
             pte.set_data(PA2PTE(PGROUNDDOWN(riscv::virt_to_phy_address(pa))) |
                          flags |
-                         riscv::PteEnum::pte_valid_m);
+                         riscv::PteEnum::pte_valid_m |
+                         riscv::PteEnum::pte_accessed_m |
+                         riscv::PteEnum::pte_dirty_m);
 #elif defined(LOONGARCH)
             pte.set_data(PA2PTE(PGROUNDDOWN(pa)) |
                          flags |
                          loongarch::pte_valid_m);
-            // printfBlue("pa: %p, pte2pa: %p\n", pa, pte.pa());
 #endif
-            // printfMagenta("由map_page设置的第三级pte: %p,pte_addr:%p，应该是：%p\n", pte.get_data(), pte.get_data_addr(), riscv::virt_to_phy_address(pa));
-            // if (pte.get_data_addr() == (uint64*)a)
-            // {
-
-            // }
             if (a == last)
                 break;
             a += PGSIZE;
@@ -2116,8 +2100,8 @@ namespace mem
     {
         if (map_pages(pt, va, sz, pa, perms) == false)
         {
-            printf("kvmmap failed\n");
-            panic("[vmm] kvmmap failed");
+            panic("[vmm] kvmmap failed: va=%p pa=%p size=%p perms=%p",
+                  va, pa, sz, perms);
         }
     }
 
@@ -2126,10 +2110,7 @@ namespace mem
         PageTable pt;
         pt.set_global();
         pt.set_base((uint64)k_pmm.alloc_page());
-        // pt.init_ref(); // 初始化引用计数
-        // printfGreen("[vmm] kvmmake alloc page success\n");
         memset((void *)pt.get_base(), 0, PGSIZE);
-        // pt.print_page_table();
 #ifdef RISCV
         const uint64 kernel_base = mem::kernel_image_start_address();
         // 页表只消费当前画像声明的 typed MMIO 区间。新增开发板时由其平台
@@ -2148,7 +2129,6 @@ namespace mem
         }
         kvmmap(pt, kernel_base, kernel_base,
                reinterpret_cast<uint64>(etext) - kernel_base, PTE_R | PTE_X);
-        // printfGreen("[vmm] kvmmake kernel text success\n");
         // map kernel data and the physical RAM we'll make use of.
         const uint64 linear_top = k_pmm.get_kernel_linear_top();
         if (linear_top <= (uint64)etext)
@@ -2157,7 +2137,6 @@ namespace mem
         }
         kvmmap(pt, (uint64)etext, (uint64)etext,
                linear_top - (uint64)etext, PTE_R | PTE_W);
-        // printfRed("[vmm] kvmmake kernel data success\n");
 
         // 正常情况下 linear mapping 已覆盖完整 RAM（包括只映射、不分配的
         // DTB/initrd 页面）。若固件把 blob 放在 RAM 描述之外，只补映射位于
@@ -2213,25 +2192,9 @@ namespace mem
             map_reserved_identity(k_dtb_addr, k_dtb_addr + dtb_size, "dtb");
         }
 
-        // // map the trampoline for trap entry/exit to
-        // // the highest virtual address in the kernel.
+        // trampoline 必须在内核页表与用户页表中保持相同虚拟地址；
+        // 用户侧映射由 ProcessMemoryManager 建立。
         kvmmap(pt, TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
-        // 我发现trapframe和kstack在xv6里面都没有初始化
-        // 因为trampoline的位置在内核和用户页表都一样，
-        // 所以他们访问的时候都是通过trampoline进行访问，没有进行映射也没有关系,
-        // 所以这里不需要进行映射.
-        /*实际上，proc在创建的时候会有两个函数，proc_pagetable,proc_mapstacks,
-        这二者会分别映射trampoline和kstack ，我们内核的页表初始化的时候已经映射了trampoline
-        这里要映射的*/
-
-        // DEBUG:虚拟化后所有代码卡死时，可检查 kernel_start 到 etext 的映射。
-        // printfBlue("etext: %p\n", etext);
-        // printfBlue("kernel_start: %p\n", kernel_base);
-        // for(uint64 va = kernel_base; va < (uint64)etext; va += PGSIZE)
-        // {
-        //     uint64 ppp= (uint64)pt.walk_addr(va);
-        //     printfRed("va: %p, pa: %p\n", va, ppp);
-        // }
 
         // 初始化堆内存
         kvmmap(pt, vm_kernel_heap_start, mem::k_pmm.get_heap_area_start(), mem::k_pmm.get_heap_area_size(), PTE_R | PTE_W);
