@@ -18,7 +18,9 @@ namespace virtio_blk
 
         virtual uint64 dma_addr(const void *ptr) const = 0;
         virtual void notify_queue(uint16 queue_index) = 0;
-        virtual void prepare_used_check() = 0;
+        // 约束 CPU 普通内存访问与设备 DMA/MMIO 的先后关系。split ring 在
+        // 发布 avail index 前后，以及观察到 used index 之后都必须使用。
+        virtual void queue_memory_barrier() = 0;
         virtual void ack_interrupt() = 0;
         virtual bool polling_wait() const = 0;
     };

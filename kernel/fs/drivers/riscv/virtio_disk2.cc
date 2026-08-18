@@ -76,7 +76,7 @@ namespace
             *mmio_reg(base_, k_mmio_queue_notify) = 0;
         }
 
-        void prepare_used_check() override
+        void queue_memory_barrier() override
         {
             __sync_synchronize();
         }

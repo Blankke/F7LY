@@ -57,7 +57,7 @@ namespace
             virtio_pci_set_queue_notify(&hw_, queue_index);
         }
 
-        void prepare_used_check() override
+        void queue_memory_barrier() override
         {
             dsb();
         }

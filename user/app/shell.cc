@@ -7,7 +7,7 @@
 static const char *g_shell_binary = "/bin/busybox";
 static const char *g_shell_argv0 = "sh";
 
-static bool path_exists(const char *path)
+bool path_exists(const char *path)
 {
     int fd = openat(AT_FDCWD, path, O_RDONLY);
     if (fd < 0)

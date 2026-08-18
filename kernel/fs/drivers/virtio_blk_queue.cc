@@ -176,7 +176,9 @@ namespace virtio_blk
         info_[chain.head].header.type = request->write ? k_req_type_write : k_req_type_read;
         info_[chain.head].header.reserved = 0;
         info_[chain.head].header.sector = request->start_sector;
-        info_[chain.head].status = 0;
+        // 0 是 VIRTIO_BLK_S_OK，不能作为提交前初值。否则 CPU 在缺少/失效
+        // 的 DMA acquire 屏障下读到旧值时，会把尚未可见的数据误判为成功。
+        info_[chain.head].status = static_cast<char>(0xff);
         info_[chain.head].dispatch_us = now_us();
 
         desc_[chain.head].addr = transport_->dma_addr(&info_[chain.head].header);
@@ -195,8 +197,12 @@ namespace virtio_blk
         desc_[chain.tail].next = 0;
 
         avail_[2 + (avail_[1] % k_queue_size)] = static_cast<uint16>(chain.head);
-        __sync_synchronize();
+        // descriptor/avail slot 必须先于 avail index 对设备可见。
+        transport_->queue_memory_barrier();
         avail_[1] = static_cast<uint16>(avail_[1] + 1);
+        // avail index 必须先于 MMIO/PCI notify。RV 弱内存序下缺少这道屏障
+        // 可能让设备看到通知却仍看到旧 index，随后也不再获得新的 kick。
+        transport_->queue_memory_barrier();
 
         ++inflight_count_;
         F7LY_PERF_MAX(BlockMaxInflight, inflight_count_);
@@ -235,17 +241,31 @@ namespace virtio_blk
 
     void VirtioBlkQueue::process_used_locked()
     {
-        transport_->prepare_used_check();
-
-        while (used_idx_ != used_->id)
+        while (true)
         {
-            int id = static_cast<int>(used_->elems[used_idx_ % k_queue_size].id);
+            // used ring 由设备异步写入，必须用 volatile 读取 index。屏障必须
+            // 位于“观察到新 index”之后、“读取 used elem/status/DMA 数据”之前；
+            // 放在 index 读取之前并不能形成设备完成的 acquire 关系。
+            const uint16 device_used_idx =
+                *reinterpret_cast<volatile uint16 *>(&used_->id);
+            if (used_idx_ == device_used_idx)
+            {
+                break;
+            }
+            transport_->queue_memory_barrier();
+
+            const uint32 device_used_id =
+                *reinterpret_cast<volatile uint32 *>(
+                    &used_->elems[used_idx_ % k_queue_size].id);
+            int id = static_cast<int>(device_used_id);
             if (id < 0 || id >= k_queue_size)
             {
                 panic("VirtioBlkQueue::process_used_locked: bad used id");
             }
 
-            if (info_[id].status != 0)
+            const uint8 device_status =
+                *reinterpret_cast<volatile uint8 *>(&info_[id].status);
+            if (device_status != 0)
             {
                 panic("VirtioBlkQueue::process_used_locked: request status error");
             }
