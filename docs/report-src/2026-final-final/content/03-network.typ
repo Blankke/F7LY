@@ -78,7 +78,7 @@ BSD Socket 接口的结果不仅体现在 syscall 返回值，也体现在后续
 #figure(
   image("fig/网络协议栈与VirtIO-net.png", width: 100%),
   caption: [网络协议栈与VirtIO-net],
-) <fig:overview-layered-architecture>
+) <fig:network-protocol-stack-virtio-net>
 
 === 协议栈职责
 
