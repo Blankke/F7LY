@@ -27,6 +27,7 @@ namespace dev
         int put_char_sync(u8 character) override;
         int put_char(u8 character) override;
         long put_chars_sync(const u8 *source, long nbytes) override;
+        long put_chars_sync_crlf(const u8 *source, long nbytes) override;
         int get_char_sync(u8 *character) override;
         int get_char(u8 *character) override;
         int handle_intr() override;

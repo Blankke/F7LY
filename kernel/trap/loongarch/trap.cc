@@ -25,6 +25,7 @@
 #include "asm.hh"
 #include "hal/tlb_shootdown.hh"
 #include "libs/perf_diag.hh"
+#include "trap/loongarch/unaligned.hh"
 // in kernelvec.S, calls kerneltrap().
 extern "C" void kernelvec();
 extern "C" void uservec();
@@ -396,13 +397,53 @@ void trap_manager::usertrap()
   usertrap_page_fault_done:
     ;
   }
-  else if (ecode == 0x8 || ecode == 0x9)
+  else if (ecode == 0x9)
+  {
+    // LA264 不保证硬件完成非对齐访存。-mstrict-align 只能约束本次构建的
+    // 内核和 initcode，根盘中预编译的 BusyBox/libc 仍可能触发 ALE；这里按
+    // Linux 的做法模拟常见普通/浮点 load、store，避免把合法程序直接杀死。
+    const uint64 badv = r_csr_badv();
+    uint32 instruction = r_csr_badi();
+    // LA264 的 ALE 不保证 BADI 填入当前指令，实机观测值可能为 0。
+    // 此时从已经保存的用户 ERA 取指，不能把 BADI=0 误判为未知指令。
+    if (instruction == 0 &&
+        mem::k_vmm.copy_in(*p->get_pagetable(),
+                           &instruction,
+                           p->_trapframe->era,
+                           sizeof(instruction)) < 0)
+    {
+      boardPrintfInfo("[trap] user ALE instruction fetch failed pid=%d era=%p badv=%p\n",
+                      p->_pid,
+                      p->_trapframe->era,
+                      badv);
+      p->add_signal(proc::ipc::signal::SIGSEGV);
+    }
+    else
+    {
+      const auto result =
+          loongarch::unaligned::emulate_user_access(*p, badv, instruction);
+      if (result != loongarch::unaligned::Result::Complete)
+      {
+        boardPrintfInfo("[trap] user ALE failed pid=%d era=%p badv=%p badi=%x result=%d\n",
+                        p->_pid,
+                        p->_trapframe->era,
+                        badv,
+                        instruction,
+                        static_cast<int>(result));
+        // 地址不可访问属于内存错误；合法地址上的未知指令按对齐错误报告 SIGBUS。
+        const int signal = result == loongarch::unaligned::Result::MemoryFault
+                               ? proc::ipc::signal::SIGSEGV
+                               : proc::ipc::signal::SIGBUS;
+        p->add_signal(signal);
+      }
+    }
+  }
+  else if (ecode == 0x8)
   {
     // LoongArch 手册：
     //   ecode=0x8, esubcode=0 => ADEF（取指地址错误）
     //   ecode=0x8, esubcode=1 => ADEM（访存地址错误）
-    //   ecode=0x9            => ALE（地址对齐错误）
-    // 这些都不是“缺页可补”的场景，直接按用户态同步地址错误送信号。
+    // ADEF/ADEM 不是“缺页可补”的场景，直接按用户态同步地址错误送信号。
     printfRed("usertrap(): address error pid=%d ecode=%u esubcode=%u era=%p badv=%p badi=%x\n",
               p->_pid, ecode, esubcode, r_csr_era(), r_csr_badv(), r_csr_badi());
     printfYellow("usertrap(): address-error regs ra=%p sp=%p fp=%p s0=%p s1=%p s2=%p s3=%p s4=%p t0=%p t1=%p a0=%p a1=%p a2=%p\n",

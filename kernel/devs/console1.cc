@@ -28,6 +28,24 @@ namespace dev
 
 	namespace
 	{
+		long write_console_output(CharDevice *stream, const void *source, long nbytes)
+		{
+			if (stream == nullptr || source == nullptr || nbytes <= 0)
+			{
+				return 0;
+			}
+
+			const auto *bytes = reinterpret_cast<const u8 *>(source);
+			if (!k_console_termios.map_output_newline())
+			{
+				return stream->put_chars_sync(bytes, nbytes);
+			}
+
+			// 默认 OPOST|ONLCR：设备负责在同一批量事务内将 LF 映射为 CRLF；
+			// 返回值仍按用户输入字节计数，插入的 CR 不属于 write(2) 消费长度。
+			return stream->put_chars_sync_crlf(bytes, nbytes);
+		}
+
 		uint64 console_vtime_to_ticks(unsigned char deciseconds)
 		{
 			if (deciseconds == 0)
@@ -208,7 +226,7 @@ namespace dev
 			printfYellow( "未绑定流" );
 			return 0;
 		}
-		return _stream->put_chars_sync( reinterpret_cast<const u8 *>(src), nbytes );
+		return write_console_output(_stream, src, nbytes);
 	}
 
 	long ConsoleStdout::read( void *, long, bool )
@@ -228,7 +246,7 @@ namespace dev
 			printfYellow( "stream not be bound" );
 			return 0;
 		}
-		return _stream->put_chars_sync( reinterpret_cast<const u8 *>(src), nbytes );
+		return write_console_output(_stream, src, nbytes);
 	}
 
 	long ConsoleStderr::read( void *, long, bool )

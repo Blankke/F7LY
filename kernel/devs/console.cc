@@ -8,6 +8,19 @@ namespace dev
 {
   namespace
   {
+    void echo_output_char(int c)
+    {
+      const u8 character = static_cast<u8>(c);
+      if (c == '\n' && k_console_termios.map_output_newline())
+      {
+        // 输入行规程已经把 Enter 的 CR 映射成 LF；回显仍需服从
+        // OPOST|ONLCR，否则下一次 shell 提示符会从当前列继续右移。
+        k_uart.put_chars_sync_crlf(&character, 1);
+        return;
+      }
+      k_uart.put_char_sync(character);
+    }
+
     void uart_irq_handler(void *)
     {
       k_uart.handle_intr();
@@ -64,9 +77,16 @@ namespace dev
       k_uart.put_char_sync(' ');
       k_uart.put_char_sync('\b');
     }
-    else if (c == '\n' || c == '\r')
+    else if (c == '\n')
     {
-      k_uart.put_char('\n');
+      // 串口终端的 LF 只下移光标，不会回到行首。内核日志统一输出 CRLF，
+      // 否则连续打印后会逐行向右漂移，最终只剩屏幕最右侧一列。
+      const u8 newline[] = {'\r', '\n'};
+      k_uart.put_chars_sync(newline, sizeof(newline));
+    }
+    else if (c == '\r')
+    {
+      k_uart.put_char_sync('\r');
     }
     else
     {
@@ -168,7 +188,7 @@ namespace dev
       {
         k_uart.put_char_sync('^');
         k_uart.put_char_sync('C');
-        k_uart.put_char_sync('\n');
+        echo_output_char('\n');
       }
       r_idx = w_idx = e_idx = 0;
       _lock.release();
@@ -222,7 +242,7 @@ namespace dev
         {
           if (_echo_enabled)
           {
-            k_uart.put_char_sync(c);
+            echo_output_char(c);
           }
           input_buf[e_idx++ % INPUT_BUF_SIZE] = c;
           if (c == '\n' || c == _eof_char || e_idx - r_idx == INPUT_BUF_SIZE)
@@ -239,7 +259,7 @@ namespace dev
       {
         if (_echo_enabled)
         {
-          k_uart.put_char_sync(c);
+          echo_output_char(c);
         }
         input_buf[e_idx++ % INPUT_BUF_SIZE] = c;
         w_idx = e_idx;
