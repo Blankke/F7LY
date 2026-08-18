@@ -1,4 +1,4 @@
-= 02 Linux 语义实现
+= Linux 语义实现
 
 F7LY-OS 在本阶段把目标从 syscall 入口覆盖推进到行为语义覆盖：系统调用层负责 ABI 边界，进程、内存、文件、IPC、时间和网络模块负责真实状态变化，最后由 LTP、CAgent 和 BuildStorm 的实际路径复核。
 
