@@ -32,6 +32,10 @@ make build PROFILE=riscv-qemu
 make build PROFILE=riscv-visionfive2
 make build PROFILE=loongarch-qemu
 make build PROFILE=loongarch-2k1000
+make visionfive2
+make visionfive2-shell
+make 2k1000
+make 2k1000-shell
 make run PROFILE=riscv-qemu
 make run PROFILE=loongarch-qemu
 make debug PROFILE=riscv-qemu
@@ -54,6 +58,9 @@ Makefile 事实：
   shell。直接构建或调试时才按需传 `MODE=shell`。旧变量 `INITCODE_MODE`
   会直接报错。
 - 可用画像为 `riscv-qemu`、`loongarch-qemu`、`riscv-visionfive2`、`loongarch-2k1000`。
+- `make visionfive2` / `make visionfive2-shell` 与 `make 2k1000` /
+  `make 2k1000-shell` 是两块实机的对称快捷构建入口；它们仍使用上述画像，
+  不建立第二套构建规则。
 - `run`、`shell`、`debug` 只接受 QEMU 画像；实机画像只使用 `make build PROFILE=...` 生成产物。
 - `run` 默认使用初赛评测盘；显式传 `QEMU_DISK=final` 可运行决赛完整
   rootfs，`shell` 固定使用决赛盘。只有真正启动本地 QEMU 的入口才检查
@@ -113,6 +120,20 @@ setenv kernel_addr_r 0x40200000
 fatload mmc 1:1 ${kernel_addr_r} kernel-rv-visionfive2.bin
 fatload mmc 1:1 ${fdt_addr_r} <实际的-VisionFive2-DTB-路径>
 booti ${kernel_addr_r} - ${fdt_addr_r}
+```
+
+VisionFive 2 v1.3B 当前实机使用的等价 U-Boot 环境命令为：
+
+```console
+setenv f7boot 'fatload mmc 1:1 0x40200000 kernel-rv-visionfive2-shell.bin; fatload mmc 1:1 0x46000000 jh7110-starfive-visionfive-2-v1.3b.dtb; booti 0x40200000 - 0x46000000'
+run f7boot
+```
+
+日常构建、复制、自动执行上述启动序列并保留交互串口可使用：
+
+```bash
+BOOT_DIR=/path/to/mounted-fat \
+  ./scripts/board/visionfive2-dev.sh build
 ```
 
 其中 `fdt_addr_r` 必须是 U-Boot 环境中一段不与内核镜像重叠的 RAM；DTB 文件名和 FAT 分区路径以实际启动介质为准。不要使用旧分支的 `go 0x40200000`：`go` 传入的是 `argc/argv`，而当前内核明确要求标准 RISC-V 启动 ABI `a0=hartid、a1=DTB 物理地址`。

@@ -406,6 +406,33 @@ namespace mem
                         index, reserved_ranges[index].start,
                         reserved_ranges[index].end);
         }
+        const uint64 managed_physical_top =
+            platform::memory::managed_physical_top();
+        if (managed_physical_top !=
+            platform::memory::k_unlimited_physical_top)
+        {
+            boardPrintfInfo("[pmm] platform managed-ram limit=0x%lx\n",
+                            managed_physical_top);
+            for (int index = 0; index < region_count; ++index)
+            {
+                uint64 raw_top = 0;
+                if (!checked_region_top(regions[index].base,
+                                        regions[index].size, raw_top))
+                {
+                    regions[index].size = 0;
+                    continue;
+                }
+                if (regions[index].base >= managed_physical_top)
+                {
+                    regions[index].size = 0;
+                }
+                else if (raw_top > managed_physical_top)
+                {
+                    regions[index].size =
+                        managed_physical_top - regions[index].base;
+                }
+            }
+        }
         printfGreen("[pmm] honored %d firmware reserved-memory ranges\n",
                     accepted_firmware_reserved_count);
         uint64 allocator_start = 0;

@@ -55,10 +55,13 @@ void initialize_memory_and_core_services()
     proc::k_scheduler.init("scheduler");
 
     mem::k_pmm.init();
+    boardPrintfInfo("[boot] stage=memory pmm ready\n");
     mem::k_vmm.init("virtual_memory_manager");
+    boardPrintfInfo("[boot] stage=memory vmm ready\n");
     mem::k_hmm.init("heap_memory_manager",
                     mem::k_pmm.get_heap_area_start(),
                     mem::k_pmm.get_heap_allocator_size());
+    boardPrintfInfo("[boot] stage=memory heap ready\n");
     // 文件页缓存依赖已经可用的 PMM/VMM/HMM，但必须在首个用户进程发布前初始化。
     proc::file_page_cache::init();
     shm::k_smm.init(mem::k_pmm.get_shm_start(), mem::k_pmm.get_shm_size());

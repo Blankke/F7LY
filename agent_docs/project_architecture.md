@@ -81,6 +81,10 @@ LoongArch QEMU 的 PCI host 边界是 `kernel/platform/pci.hh`：驱动用 BDF �
 资源归属按类型区分，不能用一个“整机资源来源”标签概括：
 
 - DTB 是启动 CPU、RAM、memreserve、`reserved-memory` 和可选 initrd 的权威输入。DTB 缺失或内存描述不可用时直接失败，不扫描 RAM、猜地址或退回另一台机器的内存上限。
+- 平台可以进一步收窄“当前内核已验证可管理”的 RAM 上界，但只能裁剪 DTB
+  已声明区间，不能扩张或伪造 RAM。VisionFive2 当前保持与已上板成功分支
+  一致的 `[0x40000000, 0x80000000)` 低 1 GiB 窗口；解除限制前需实机验证
+  4 GiB 以上 PMM、Sv39 线性映射以及所有 DMA 路径。
 - 现有已知机器的 UART、IRQ、MMIO 等设备资源集中在所选平台的 `platform_board_config.hh`，以 typed region/常量交给驱动；通用 `memlayout.hh` 不保存设备地址。
 - 后续接入 DTB 设备发现时，应在平台层把 FDT 属性一次转换为同样的 typed 资源，再交给驱动。驱动不能自行保存第二份板级地址。
 - 固定资源只能是明确的平台契约，禁止在 DTB 解析失败后静默启用固定 fallback。

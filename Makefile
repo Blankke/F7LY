@@ -14,6 +14,7 @@ include mk/kernel.mk
 include mk/qemu.mk
 
 .PHONY: all competition-riscv competition-loongarch \
+        visionfive2 visionfive2-shell 2k1000 2k1000-shell \
         build build-current initcode run shell debug qemu-run qemu-debug \
         prepare-image help profiles print-config force-build-metadata \
         perf-tool perf-tools perf-native-tests check-kernel-no-fp \
@@ -30,6 +31,20 @@ competition-riscv:
 competition-loongarch:
 	@$(MAKE) $(BUILD_SUBMAKE_JOBS) PROFILE=loongarch-qemu MODE=evaluation build-current
 
+# 两块实机的对称快捷入口。目标名只负责选择不可拆分的平台画像，实际依赖图
+# 仍由 build-current 提供，避免重新引入旧版 ARCH/BOARD 组合变量。
+visionfive2:
+	@$(MAKE) $(BUILD_SUBMAKE_JOBS) PROFILE=riscv-visionfive2 MODE=evaluation build-current
+
+visionfive2-shell:
+	@$(MAKE) $(BUILD_SUBMAKE_JOBS) PROFILE=riscv-visionfive2 MODE=shell build-current
+
+2k1000:
+	@$(MAKE) $(BUILD_SUBMAKE_JOBS) PROFILE=loongarch-2k1000 MODE=evaluation build-current
+
+2k1000-shell:
+	@$(MAKE) $(BUILD_SUBMAKE_JOBS) PROFILE=loongarch-2k1000 MODE=shell build-current
+
 # build 是稳定的公开入口；实际依赖图在并行子 make 的 build-current 中展开。
 # 这样普通 `make build` 仍自动并行，又不需要在 Makefile 内篡改 MAKEFLAGS。
 build:
@@ -40,6 +55,8 @@ help:
 		'F7LY 构建命令：' \
 		'  make all' \
 		'  make build PROFILE=<画像> [MODE=evaluation|shell]' \
+		'  make visionfive2 | make visionfive2-shell' \
+		'  make 2k1000     | make 2k1000-shell' \
 		'  make run   PROFILE=<qemu画像> [QEMU_DISK=preliminary|final]' \
 		'  make shell PROFILE=<qemu画像>' \
 		'  make debug PROFILE=<qemu画像> [MODE=evaluation|shell]' \

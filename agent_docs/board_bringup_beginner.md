@@ -131,6 +131,7 @@ VisionFive2：
 
 ```bash
 make build PROFILE=riscv-visionfive2 MODE=shell
+# 等价快捷入口：make visionfive2-shell
 ls -lh kernel-rv-visionfive2-shell kernel-rv-visionfive2-shell.bin
 ```
 
@@ -334,6 +335,14 @@ run chipa_set_linux
 booti ${kernel_addr_r} - ${fdt_addr_r}
 ```
 
+已验证的 v1.3B 环境也可以把相同流程保存成临时命令（首次成功前仍不要
+`saveenv`）：
+
+```console
+setenv f7boot 'fatload mmc 1:1 0x40200000 kernel-rv-visionfive2-shell.bin; fatload mmc 1:1 0x46000000 jh7110-starfive-visionfive-2-v1.3b.dtb; booti 0x40200000 - 0x46000000'
+run f7boot
+```
+
 中间的 `-` 表示“没有 initrd”，不是减号计算。不要把这条命令换成旧分支的 `go 0x40200000`；`go` 不会按 RISC-V 标准把 hart id 和 DTB 地址交给当前内核。
 
 第一次成功前不要 `saveenv`。
@@ -369,7 +378,26 @@ ls /
 echo F7LY_VF2_BOOT_OK
 ```
 
-### 4.7 VisionFive2 卡住时怎么看
+### 4.7 日常开发循环
+
+第一次手动启动成功后，可以使用与 2K1000LA 对称的脚本完成构建、复制、
+等待 U-Boot、执行 `fatload/booti` 和串口日志记录：
+
+```bash
+BOOT_DIR=/path/to/mounted-fat \
+  ./scripts/board/visionfive2-dev.sh build
+
+# 复用当前 kernel-rv-visionfive2-shell.bin
+BOOT_DIR=/path/to/mounted-fat \
+  ./scripts/board/visionfive2-dev.sh send
+```
+
+脚本默认使用 `/dev/ttyUSB0`、`mmc 1:1`、`0x40200000`、`0x46000000`
+和 v1.3B DTB 文件名，可用 `SERIAL_DEVICE`、`MMC_DEVICE`、
+`MMC_PARTITION`、`DTB_SOURCE` 等同名环境变量覆盖。日志写入 `logs/run/`，
+最新一份由 `logs/run/output_visionfive2_latest.txt` 指向。
+
+### 4.8 VisionFive2 卡住时怎么看
 
 | 最后一条可见信息 | 说明已经成功到哪 | 下一步只查什么 |
 | --- | --- | --- |
