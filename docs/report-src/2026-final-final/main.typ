@@ -29,3 +29,5 @@
 #include "content/03-network.typ"
 #include "content/04-smp.typ"
 #include "content/05-performance.typ"
+#include "content/06-summary&review.typ"
+#include "content/appendix.typ"

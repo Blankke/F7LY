@@ -10,14 +10,14 @@
 
 本报告建议围绕一句话展开：
 
-F7LY-OS 在决赛阶段从“可运行基础 Linux 程序的双架构教学内核”，推进到“能够在 RISC-V / LoongArch 双架构上承载 glibc、CAgent、BuildStorm、8 核、8 GiB 和大规模文件 / 内存 / 线程压力的 Linux ABI 兼容内核”。
+F7LY-OS 在决赛阶段从“可运行基础 Linux 程序的双架构教学内核”，推进到“能够在 RISC-V / LoongArch 双架构上承载 glibc rootfs、CAgent、BuildStorm、8 核、8 GiB 和大规模文件 / 内存 / 线程 / 网络压力的 Linux ABI 兼容内核”。
 
 ### 0.2 四条主线
 
 1. 架构主线：从架构代码、板级资源和设备驱动混合，重构为“架构机制 - 平台画像 - 设备驱动 - 通用内核服务”的分层模型。
 2. 语义主线：从 syscall 入口覆盖，推进到文件、进程、IPC、事件、内存、网络和 libc 可观察状态的 Linux 语义闭环。
 3. 并发主线：从单核和低压力回归，推进到 SMP 调度、跨核 TLB、futex、等待队列、文件系统锁和页缓存一致性。
-4. 性能主线：围绕 BuildStorm 暴露的瓶颈，对调度、路径解析、ext4、VMA、文件页缓存、pipe 和诊断工具进行收口。
+4. 性能主线：围绕 BuildStorm 暴露的瓶颈，对调度、块设备、ext4、VMA、文件页缓存、pipe 和诊断工具进行收口。
 
 ### 0.3 正文组织规则
 
@@ -52,7 +52,7 @@ F7LY-OS 在决赛阶段从“可运行基础 Linux 程序的双架构教学内�
 - 动态 ELF、`PT_INTERP`、musl / glibc 动态链接器路径处理、shebang。
 - 进程、线程、`clone` / `clone3`、futex、信号、POSIX timer。
 - `mmap`、COW、SysV SHM、memfd、文件页缓存、VMA / VMObject。
-- ext4 / VFS、pipe / FIFO、epoll / eventfd / timerfd、socket、TCP / UDP。
+- ext4 / VFS、pipe / FIFO、epoll / eventfd / timerfd、socket_file loopback、ONPS / VirtIO-net 网络链路。
 - initcode 直接运行回归入口，并在结束后调用 `shutdown()`。
 
 ### 1.4 分层内核架构
@@ -161,14 +161,14 @@ RV/LA × musl/glibc
 ## 03 工作二：网络链路
 
 ### 3.1 网络模块分层
-网络系统基于 Open-NPStack 协议栈实现，旨在构建高效灵活的网络通信能力。本系统支持 AF_INET、AF_UNIX 等多种地址族的套接字操作，完整实现了 TCP 与 UDP 传输协议。网络系统通过统一的抽象接口管理所有网络设备与套接字资源。
+网络系统以 Linux 兼容 Socket 为统一入口，向下分成本机 loopback 快路径和 ONPS / VirtIO-net 外部 IPv4 路径两条数据面。本系统支持 AF_INET、AF_UNIX 等多种地址族的套接字操作，TCP / UDP / ICMP 与设备收发分别由 socket_file、协议栈和网卡后端协同完成。
 
 整个网络系统主要包含以下几个核心组件：
 1. VFS 集成层
 2. BSD Socket 接口
-3. 网络协议协议栈
-4. 网络适配层
-5. VirtIO 网络驱动层
+3. socket_file 分流层
+4. ONPS 协议栈与网络适配层
+5. VirtIO-Net / GMAC 设备驱动层
 
 网络系统采用分层架构设计，从底层硬件驱动到上层应用接口，形成了完整的网络协议栈。
 
@@ -315,3 +315,20 @@ Linux 兼容默认 4KiB；支持 F_SETPIPE_SZ 动态调整，最大 64KiB。性�
 
 ## 06 亮点与总结
 
+### 6.1 当前成果概述
+
+- 当前报告正文已经覆盖 01 到 05 章，分别对应整体架构、Linux 语义、网络链路、多核并发和性能优化。
+- 现阶段核心成果是把 CPU 拓扑、SMP 调度、页表 / TLB、等待唤醒、块设备、ext4、pipe、VMA 和网络链路收束到一套 Linux 兼容路径。
+- 关键验证对象已经从单点 syscall 扩展到 glibc rootfs、CAgent、BuildStorm、shell、gcc、rustc、vim 和 git 等真实用户态程序。
+
+### 6.2 已验证能力
+
+- 双架构启动、动态 ELF、`PT_INTERP`、shebang 和 Linux ABI syscall 路径已经形成闭环。
+- `socket_file` loopback 快路径与 ONPS / VirtIO-net 外部 IPv4 路径已经分流明确。
+- ext4、文件页缓存、pipe、VMA / VmObject、futex、epoll 和跨核调度已经可以共同承载长链路压力。
+
+### 6.3 后续工作重点
+
+- 继续收敛 Linux ABI 中仍需细化的边界行为和长尾语义。
+- 继续提升高并发、多核和大内存场景下的稳定性与可预测性。
+- 继续扩展真实用户程序和外部网络场景的端到端覆盖面。
